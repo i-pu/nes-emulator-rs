@@ -1,21 +1,22 @@
-use std::io::prelude::*;
-use std::fs::File;
+mod nes;
+mod cpu;
+mod cpu_bus;
+mod ppu;
+mod wram;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // TODO:
     // 0-3: 4e45531a
     // 4: PRG = program ROM units 16KB
     // 5: CHR = character ROM units 8KB
     //    - sprite images
     // TODO: slice PRG and CHR
-
     // register: 8bit, PC: 16bit
     // let nes_header = 0x4e45531a;
 
-    let mut f = File::open("./sample1/sample1.nes")?;
-    let mut buffer: Vec<u8> = Vec::new();
-    f.read_to_end(&mut buffer)?;
-
-    println!("{:?}", &buffer[0..5]);
+    let cassette = "./sample1/sample1.nes";
+    let nes: nes::NES = nes::NES::new(cassette)?;
+    nes.run();
     Ok(())
 }
 
