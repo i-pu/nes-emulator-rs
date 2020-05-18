@@ -1,8 +1,27 @@
 use std::ops::Index;
 
-/// VRAM_SIZE = 0x3fff
+pub struct PPU {
+    register: Register,
+}
+struct Register {
+
+}
+
+impl PPU {
+    pub fn new() -> PPU {
+        PPU {
+            register: Register{ }
+        }
+    }
+    // cyclesはppuが実行していいサイクル数
+    pub fn run(&mut self, cycles: usize) {
+        unimplemented!()
+    }
+}
+
+/// VRAM_SIZE = 0x1fff
 /// 単位はbyte
-const VRAM_SIZE:usize = 0x3fff;
+const VRAM_SIZE:usize = 0x1000;
 struct VRAM {
     memory: [u8; VRAM_SIZE],
 }

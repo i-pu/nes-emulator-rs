@@ -1,8 +1,4 @@
-mod nes;
-mod cpu;
-mod cpu_bus;
-mod ppu;
-mod wram;
+use nes_emulator_rs::{nes};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO:

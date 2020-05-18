@@ -1,8 +1,16 @@
 use std::ops::Index;
 
-/// WRAM_SIZE = 32kib
-const WRAM_SIZE: usize = 0xFFFF;
+/// WRAM_SIZE = 2kib
+const WRAM_SIZE: usize = 0x1000;
+// $0100～$01FFがスタックに相当する
 
+/// # Example
+/// ```
+/// let wram = WRAM::new();
+/// wram[0];
+/// panic!("woo");
+/// ```
+/// wram[0x8000]
 pub struct WRAM {
     memory: [u8; WRAM_SIZE],
 }
@@ -16,7 +24,12 @@ impl Index<usize> for WRAM {
 
 impl WRAM {
     pub fn new() -> Self {
-        unimplemented!()
+        WRAM {
+            memory: [0;WRAM_SIZE],
+        }
+    }
+    pub fn load_program(&mut self, program: Vec<u8>) {
+        unimplemented!();
     }
 }
 
