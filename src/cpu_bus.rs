@@ -9,11 +9,11 @@ pub struct CpuBus {
     // extend_rom
     // prog_rom1
     // prog_rom2
-    //pro: u8,
+    // pro: u8,
     pub ppu: ppu::PPU,
-    //apu: u8,
-    //keypad: u8,
-    //dma: u8,
+    // apu: u8,
+    // keypad: u8,
+    // dma: u8,
 }
 
 impl CpuBus {
@@ -55,7 +55,9 @@ impl CpuBus {
     }
 
     /// write_by_cpuはWRAMにデータを書き込む
-    pub fn write(&mut self, data: u8) -> u8 {
+    /// # Return
+    /// * `書き込んだ結果の値`
+    pub fn write(&mut self, addr: u16, data: u8) -> u8 {
 
         // // log.debug(`cpu:write addr = ${addr}`, data);
         // if (addr < 0x0800) {

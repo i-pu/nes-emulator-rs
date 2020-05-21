@@ -1,5 +1,7 @@
-mod op;
 use crate::cpu_bus;
+
+mod op;
+mod tests;
 struct Register {
     A: u8,	                // 8bit	アキュームレータ	汎用演算
     X: u8,	                // 8bit	インデックスレジスタ	アドレッシング、カウンタなど
@@ -7,17 +9,19 @@ struct Register {
     S: u8,	                // 8bit	スタックポインタ	スタックの位置を保持
     P: StatusRegister,	    // 8bit	ステータスレジスタ	CPUの各種状態を保持
     PC: u16,                // 16bit	プログラムカウンタ	実行している位置を保持
+    SP: u16,                // 16bit スタックポインタ $0100 - $01FF (上位8bitは0x01固定)
 }
 
 impl Register {
     pub fn new() -> Self {
         Self {
-            A: 0x00 as u8,
-            X: 0x00 as u8,
-            Y: 0x00 as u8,
-            S: 0x00 as u8,
+            A: 0x00u8,
+            X: 0x00u8,
+            Y: 0x00u8,
+            S: 0x00u8,
             P: StatusRegister::new(),
-            PC: 0x0000 as u16,
+            PC: 0x0000u16,
+            SP: 0x01ffu16,
         }
     }
 }
@@ -27,14 +31,31 @@ impl Register {
 /// ステータスレジスタの詳細です。bit5は常に1で、bit3はNESでは未実装です。
 /// IRQは割り込み、BRKはソフトウエア割り込みです。
 struct StatusRegister {
-	negative: bool, 	    // 7 N ネガティブ	Aの7ビット目と同じになります。負数の判定用。
-	overflow: bool, 	    // 6 V オーバーフロー	演算がオーバーフローを起こした場合セットされます。
-	reserved: bool, 	    // 5 R 予約済み	使用できません。常にセットされています。
-	breakm: bool, 	        // 4 B ブレークモード	BRK発生時はセットされ、IRQ発生時はクリアされます。
-	decimal: bool, 	        // 3 D デシマルモード	セットすると、BCDモードで動作します。(ファミコンでは未実装)
-	interrupt: bool, 	    // 2 I IRQ禁止	クリアするとIRQが許可され、セットするとIRQが禁止になります。
-	zero: bool, 	        // 1 Z ゼロ	演算結果が0になった場合セットされます。ロード命令でも変化します。
-	carry: bool, 	        // 0 C キャリー	キャリー発生時セットされます。
+    /// # negative
+    /// 7 N ネガティブ 負数の判定用。
+    negative: bool,
+    /// # overflow
+    /// 6 V オーバーフロー 演算がオーバーフローを起こした場合セットされます。
+    /// V = C6 xor C7
+    overflow: bool,
+    /// # reserved
+    /// 5 R 予約済み 使用できません。常にセットされています。
+    reserved: bool,
+    /// # breakm
+    /// 4 B ブレークモード BRK発生時はセットされ、IRQ発生時はクリアされます。
+    breakm: bool,
+    /// # decimal
+    ///3Dデシマルモード セットすると、BCDモードで動作します。(ファミコンでは未実装)
+    decimal: bool,
+    /// # interrupt
+    /// 2 I IRQ禁止 クリアするとIRQが許可され、セットするとIRQが禁止になります。
+    interrupt: bool,
+    /// # zero
+    /// 1 Z ゼロ 演算結果が0になった場合セットされます。ロード命令でも変化します。
+    zero: bool,
+    /// # carry
+    /// 0 C キャリー キャリー発生時セットされます。
+	carry: bool,
 }
 
 impl StatusRegister {
@@ -96,9 +117,51 @@ impl Cpu {
     }
 
     /// レジスタの初期化
-    fn reset(&mut self) -> () {
+    fn reset(&mut self) {
         self.register = Register::new();
     }
+
+    /// スタックにプッシュ(下方向に伸びる)
+    /// see <https://pgate1.at-ninja.jp/NES_on_FPGA/nes_cpu.htm#stack>
+    fn stack_push(&mut self, cpu_bus: &mut cpu_bus::CpuBus, data: u8) {
+        cpu_bus.write(self.register.SP, data);
+        self.register.SP -= 1;
+    }
+
+    /// スタックからポップ
+    fn stack_pop(&mut self, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
+        self.register.SP += 1;
+        cpu_bus.read(self.register.SP)
+    }
+
+    fn popStatus(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
+        unimplemented!()
+    }
+
+    /// フラグレジスタ
+    fn get_flags(&mut self) -> u8 {
+        // 7-0: [N V R B D I Z C]
+        (self.register.P.negative as u8) << 7 +
+            (self.register.P.overflow as u8) << 6 +
+            (self.register.P.reserved as u8) << 5 +
+            (self.register.P.breakm as u8) << 4 +
+            (self.register.P.decimal as u8) << 3 +
+            (self.register.P.interrupt as u8) << 2 +
+            (self.register.P.zero as u8) << 1 +
+            (self.register.P.carry as u8)
+    }
+
+    fn set_flags(&mut self, flags: u8) {
+        self.register.P.negative = (flags & (1 << 7)) != 0;
+        self.register.P.overflow = (flags & (1 << 6)) != 0;
+        self.register.P.reserved = (flags & (1 << 5)) != 0;
+        self.register.P.breakm = (flags & (1 << 4)) != 0;
+        self.register.P.decimal = (flags & (1 << 3)) != 0;
+        self.register.P.interrupt = (flags & (1 << 2)) != 0;
+        self.register.P.zero = (flags & (1 << 1)) != 0;
+        self.register.P.carry = (flags & 1) != 0;
+    }
+
 
     /// fetch_operandはアドレッシングモードからアドレスを返す
     /// アドレスを返さない場合があるのでそのときはNoneを返す
@@ -163,6 +226,8 @@ impl Cpu {
 
     fn exec(&mut self, op::Instruction(opcode, mode, cycles): op::Instruction, operand: Operand, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
         match opcode {
+            // 転送命令
+            // see <http://hp.vector.co.jp/authors/VA042397/nes/6502.html#translate>
             op::OpCode::LDA => {
                 match (mode, operand) {
                     (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
@@ -182,16 +247,848 @@ impl Cpu {
                     }
                     _ => panic!("そんなアドレッシングモードとオペランドの組み合わせはありません opcode: {:?}, mode: {:?}", mode, operand)
                 }
+
+                // N Z
                 self.register.P.negative =  self.register.A & 0b10000000 != 0;
                 self.register.P.zero = self.register.A == 0;
             }
-            _ => panic!("そんな命令はありません. opcode: {:?}", opcode)
+            // アドレス「IM16 + X」の8bit値をXにロード
+            op::OpCode::LDX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        self.register.X = byte;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageY, Operand::Byte(byte)) => {
+                        self.register.X = cpu_bus.read(byte as u16);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word)) => {
+                        self.register.X = cpu_bus.read(word);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.X & 0b10000000 != 0;
+                self.register.P.zero = self.register.X == 0;
+            }
+            // アドレス「IM16 + Y」の8bit値をAにロード
+            op::OpCode::LDY => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        self.register.Y = byte;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        self.register.Y = cpu_bus.read(byte as u16);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        self.register.Y = cpu_bus.read(word);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.Y & 0b10000000 != 0;
+                self.register.P.zero = self.register.Y == 0;
+            }
+            op::OpCode::STA => {
+                match (mode, operand) {
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        cpu_bus.write(byte as u16, self.register.A);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
+                    (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
+                        cpu_bus.write(word, self.register.A);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::STX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageY, Operand::Byte(byte)) => {
+                        cpu_bus.write(byte as u16, self.register.X);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) => {
+                        cpu_bus.write(word, self.register.X);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::STY => {
+                match (mode, operand) {
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        cpu_bus.write(byte as u16, self.register.Y);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) => {
+                        cpu_bus.write(word, self.register.Y);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            // レジスタ間転送
+            op::OpCode::TAX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.X = self.register.A;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.X & 0b10000000 != 0;
+                self.register.P.zero = self.register.X == 0;
+            }
+            op::OpCode::TXA => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.Y = self.register.A;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                //  N Z
+                self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                self.register.P.zero = self.register.A == 0;
+            }
+            op::OpCode::TAY => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.Y = self.register.A;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.Y & 0b10000000 != 0;
+                self.register.P.zero = self.register.Y == 0;
+            }
+            op::OpCode::TYA => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.A = self.register.Y;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // NZ
+                self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                self.register.P.zero = self.register.A == 0;
+            }
+            op::OpCode::TSX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.X = self.register.S;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.X & 0b10000000 != 0;
+                self.register.P.zero = self.register.X == 0;
+            }
+            op::OpCode::TXS => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.S = self.register.X;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.S & 0b10000000 != 0;
+                self.register.P.zero = self.register.S == 0;
+            }
+
+            // 算術演算
+            op::OpCode::ADC => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        // calc on u16
+                        let result = self.register.A as u16 + byte as u16 + self.register.P.carry as u16;
+                        // N V Z C
+                        // FIXME: 多分バグらせ侍
+                        // over u8
+                        self.register.P.carry = result > 0x00ffu16;
+                        // タブンチガウ
+                        self.register.P.overflow = self.register.P.carry;
+                        // u16 -> u8
+                        self.register.A = (result & 0xff) as u8;
+                        self.register.P.negative = self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let data = cpu_bus.read(byte as u16);
+                        // calc on u16
+                        let result = self.register.A as u16 + data as u16 + self.register.P.carry as u16;
+                        // N V Z C
+                        self.register.P.carry = result > 0x00ffu16;
+                        self.register.P.overflow = self.register.P.carry;
+                        self.register.A = (result & 0xff) as u8;
+                        self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word)) |
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
+                    (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        // calc on u16
+                        let result = self.register.A as u16 + data as u16 + self.register.P.carry as u16;
+                        // N V Z C
+                        self.register.P.carry = result > 0x00ffu16;
+                        self.register.P.overflow = self.register.P.carry;
+                        self.register.A = (result & 0xff) as u8;
+                        self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            // 論理演算
+            op::OpCode::AND => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        self.register.A &= byte;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        self.register.A &= cpu_bus.read(byte as u16);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word))|
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
+                    (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
+                        self.register.A &= cpu_bus.read(word);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                self.register.P.zero = self.register.A == 0;
+            }
+            op::OpCode::ORA => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        self.register.A |= byte;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        self.register.A |= cpu_bus.read(byte as u16);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word))|
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
+                    (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
+                        self.register.A |= cpu_bus.read(word);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                self.register.P.zero = self.register.A == 0;
+            }
+            op::OpCode::EOR => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        self.register.A ^= byte;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        self.register.A ^= cpu_bus.read(byte as u16);
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word))|
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
+                    (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
+                        self.register.A ^= cpu_bus.read(word);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.A & 0b10000000 != 0;
+                self.register.P.zero = self.register.A == 0;
+            }
+            // インクリメント・デクリメント
+            op::OpCode::INC => {
+                let res = match (mode, operand) {
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let data = cpu_bus.read(byte as u16);
+                        cpu_bus.write(byte as u16, data.wrapping_add(1))
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        cpu_bus.write(word, data.wrapping_add(1))
+                    }
+                    _ => panic!("error, mode: {:?}, operand: {:?}", mode, operand)
+                };
+
+                // N Z
+                self.register.P.negative =  res & 0b10000000 != 0;
+                self.register.P.zero = res == 0;
+            }
+            op::OpCode::DEC => {
+                let res = match (mode, operand) {
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let data = cpu_bus.read(byte as u16);
+                        cpu_bus.write(byte as u16, data.wrapping_sub(1))
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        cpu_bus.write(word, data.wrapping_sub(1))
+                    }
+                    _ => panic!("error, mode: {:?}, operand: {:?}", mode, operand)
+                };
+                // N Z
+                self.register.P.negative =  res & 0b10000000 != 0;
+                self.register.P.zero = res == 0;
+            }
+            op::OpCode::INX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.X = self.register.X.wrapping_add(1)
+                    }
+                    _ => panic!("error, mode: {:?}, operand: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.X & 0b10000000 != 0;
+                self.register.P.zero = self.register.X == 0;
+            }
+            op::OpCode::DEX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.X = self.register.X.wrapping_sub(1);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.X & 0b10000000 != 0;
+                self.register.P.zero = self.register.X == 0;
+            }
+            op::OpCode::INY => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        // avoid overflow
+                        self.register.Y = self.register.Y.wrapping_add(1);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative =  self.register.Y & 0b10000000 != 0;
+                self.register.P.zero = self.register.Y == 0;
+            }
+            op::OpCode::DEY => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.Y = self.register.Y.wrapping_sub(1);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+                // N Z
+                self.register.P.negative = self.register.Y & 0b10000000 != 0;
+                self.register.P.zero = self.register.Y == 0;
+            }
+
+            // 比較
+            // see <http://6502.org/tutorials/compare_instructions.html>
+            op::OpCode::CMP => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        let a = self.register.A;
+                        // N Z C
+                        self.register.P.carry = a >= byte;
+                        self.register.P.zero = a == byte;
+                        self.register.P.negative = (a.wrapping_sub(byte)) & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let mem = cpu_bus.read(byte as u16);
+                        let a = self.register.A;
+                        // N Z C
+                        self.register.P.carry = a >= mem;
+                        self.register.P.zero = a == mem;
+                        self.register.P.negative = (a.wrapping_sub(mem)) & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word))|
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
+                    (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
+                        let mem = cpu_bus.read(word);
+                        let a = self.register.A;
+
+                        // N Z C
+                        self.register.P.carry = a >= mem;
+                        self.register.P.zero = a == mem;
+                        self.register.P.negative = (a.wrapping_sub(mem)) & 0b10000_000 == 1;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::CPX => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        let x = self.register.X;
+                        // N Z C
+                        self.register.P.carry = x >= byte;
+                        self.register.P.zero = x == byte;
+                        self.register.P.negative = (x.wrapping_sub(byte)) & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {
+                        let mem = cpu_bus.read(byte as u16);
+                        let x = self.register.X;
+                        // N Z C
+                        self.register.P.carry = x >= mem;
+                        self.register.P.zero = x == mem;
+                        self.register.P.negative = (x.wrapping_sub(mem)) & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word))=> {
+                        let mem = cpu_bus.read(word);
+                        let x = self.register.X;
+                        // N Z C
+                        self.register.P.carry = x >= mem;
+                        self.register.P.zero = x == mem;
+                        self.register.P.negative = (x.wrapping_sub(mem)) & 0b10000_000 != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::CPY => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        let y = self.register.Y;
+                        // N Z C
+                        self.register.P.carry = y >= byte;
+                        self.register.P.zero = y == byte;
+                        self.register.P.negative = (y.wrapping_sub(byte)) & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {
+                        let mem = cpu_bus.read(byte as u16);
+                        let y = self.register.Y;
+                        // N Z C
+                        self.register.P.carry = y >= mem;
+                        self.register.P.zero = y == mem;
+                        self.register.P.negative = (y.wrapping_sub(mem)) & 0b10000_000 != 0;
+
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word))=> {
+                        let mem = cpu_bus.read(word);
+                        let y = self.register.Y;
+                        // N Z C
+                        self.register.P.carry = y >= mem;
+                        self.register.P.zero = y == mem;
+                        self.register.P.negative = (y.wrapping_sub(mem)) & 0b10000_000 != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            },
+
+            // // シフトローテーション
+            op::OpCode::ASL => {
+                match (mode, operand) {
+                    (op::AddressingMode::Accumulator, Operand::None) => {
+                        self.register.P.carry = self.register.A & 0b10000_000 != 0;
+                        self.register.A = self.register.A << 1;
+                        self.register.P.zero = self.register.A == 0;
+                        self.register.P.negative = self.register.A & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let mut data = cpu_bus.read(byte as u16);
+                        self.register.P.carry = data & 0b10000_000 != 0;
+                        data =  data << 1;
+                        cpu_bus.write(byte as u16, data);
+                        self.register.P.zero = data == 0;
+                        self.register.P.negative = data & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        let mut data = cpu_bus.read(word);
+                        self.register.P.carry = data & 0b10000_000 != 0;
+                        data =  data << 1;
+                        cpu_bus.write(word, data);
+                        self.register.P.zero = data == 0;
+                        self.register.P.negative = data & 0b10000_000 != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::LSR => {
+                match (mode, operand) {
+                    (op::AddressingMode::Accumulator, Operand::None) => {
+                        self.register.P.carry = self.register.A & 0b00000_001 != 0;
+                        self.register.A = self.register.A >> 1;
+                        self.register.P.zero = self.register.A == 0;
+                        self.register.P.negative = self.register.A & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let mut data = cpu_bus.read(byte as u16);
+                        self.register.P.carry = data & 0b00000_001 != 0;
+                        data =  data >> 1;
+                        cpu_bus.write(byte as u16, data);
+                        self.register.P.zero = data == 0;
+                        self.register.P.negative = data & 0b10000_000 != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        let mut data = cpu_bus.read(word);
+                        self.register.P.carry = data & 0b00000_001 != 0;
+                        data =  data >> 1;
+                        cpu_bus.write(word, data);
+                        self.register.P.zero = data == 0;
+                        self.register.P.negative = data & 0b10000_000 != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::ROL => {
+                match (mode, operand) {
+                    (op::AddressingMode::Accumulator, Operand::None) => {
+                        let a = self.register.A;
+                        self.register.A = a.rotate_left(1);
+                        self.register.P.carry = a & 0x80 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                        self.register.P.negative = self.register.A & 0x80 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let data = cpu_bus.read(byte as u16);
+                        let data_written = data.rotate_left(1);
+                        cpu_bus.write(byte as u16, data_written);
+                        self.register.P.carry = data & 0x80 != 0;
+                        self.register.P.zero = data_written == 0;
+                        self.register.P.negative = data_written & 0x80 != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        let data_written = data.rotate_left(1);
+                        cpu_bus.write(word, data_written);
+                        self.register.P.carry = data & 0x80 != 0;
+                        self.register.P.zero = data_written == 0;
+                        self.register.P.negative = data_written & 0x80 != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::ROR => {
+                match (mode, operand) {
+                    (op::AddressingMode::Accumulator, Operand::None) => {
+                        let a = self.register.A;
+                        self.register.A = a.rotate_right(1);
+                        self.register.P.carry = a & 0x01 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                        self.register.P.negative = self.register.A & 0x80 != 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        let data = cpu_bus.read(byte as u16);
+                        let data_written = data.rotate_right(1);
+                        cpu_bus.write(byte as u16, data_written);
+                        self.register.P.carry = data & 0x01 != 0;
+                        self.register.P.zero = data_written == 0;
+                        self.register.P.negative = data_written & 0x80 != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        let data_written = data.rotate_right(1);
+                        cpu_bus.write(word, data_written);
+                        self.register.P.carry = data & 0x01 != 0;
+                        self.register.P.zero = data_written == 0;
+                        self.register.P.negative = data_written & 0x80 != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::SBC => {
+                match (mode, operand) {
+                    (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
+                        // calc on u16
+                        let result = self.register.A as u16 - byte as u16 - (1 - self.register.P.carry as u16);
+                        self.register.P.carry = result > 0x00ffu16;
+                        self.register.P.overflow = ((self.register.A as u16 ^ result) & 0x80) != 0 && ((self.register.A ^ byte) & 0x80) != 0;
+                        self.register.A = (result & 0xff) as u8;
+                        self.register.P.negative = self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
+                    (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
+                        // TODO: 自信ない
+                        let data = cpu_bus.read(byte as u16);
+                        let result = self.register.A as u16 - data as u16 - (1 - self.register.P.carry as u16);
+                        self.register.P.carry = result > 0x00ffu16;
+                        self.register.P.overflow = ((self.register.A as u16 ^ result) & 0x80) != 0 && ((self.register.A ^ data) & 0x80) != 0;
+                        self.register.A = (result & 0xff) as u8;
+                        self.register.P.negative = self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteY, Operand::Word(word))|
+                    (op::AddressingMode::AbsoluteIndirect, Operand::Word(word)) |
+                    (op::AddressingMode::IndirectIndexed, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        let result = self.register.A as u16 - data as u16 - (1 - self.register.P.carry as u16);
+                        self.register.P.carry = result > 0x00ffu16;
+                        self.register.P.overflow = ((self.register.A as u16 ^ result) & 0x80) != 0 && ((self.register.A ^ data) & 0x80) != 0;
+                        self.register.A = (result & 0xff) as u8;
+                        self.register.P.negative = self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+
+            // ビット検査
+            op::OpCode::BIT => {
+                match (mode, operand) {
+                    (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {
+                        let data = cpu_bus.read(byte as u16);
+                        self.register.P.negative = data & 0x80 != 0;
+                        self.register.P.overflow = data & 0x40 != 0;
+                        self.register.P.zero = self.register.A & data != 0;
+                    }
+                    (op::AddressingMode::Absolute, Operand::Word(word)) => {
+                        let data = cpu_bus.read(word);
+                        self.register.P.negative = data & 0x80 != 0;
+                        self.register.P.overflow = data & 0x40 != 0;
+                        self.register.P.zero = self.register.A & data != 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+            }
+
+            // スタック
+            op::OpCode::PHA => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.stack_push(cpu_bus, self.register.A);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::PLA => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.A = self.stack_pop(cpu_bus);
+                        // N Z
+                        self.register.P.negative = self.register.A & 0b10000000 != 0;
+                        self.register.P.zero = self.register.A == 0;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::PHP => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        let flag = self.get_flags();
+                        self.stack_push(cpu_bus, flag);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::PLP => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        let flag = self.stack_pop(cpu_bus);
+                        self.set_flags(flag);
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+
+            // ジャンプ
+            op::OpCode::JMP => {
+                match (mode, operand) {
+                    (op::AddressingMode::Absolute, Operand::Word(word)) |
+                    (op::AddressingMode::AbsoluteIndirect, Operand::Word(word)) => {
+                        self.register.PC = word;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::JSR => {
+                match (mode, operand) {
+                    (op::AddressingMode::AbsoluteIndirect, Operand::Word(word)) => {
+                        let mut pc = self.register.PC.wrapping_sub(1);
+                        self.stack_push(cpu_bus, pc.rotate_right(8) as u8);
+                        self.stack_push(cpu_bus, pc as u8);
+                        self.register.PC = word;
+                    }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::RTS => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.stack_pop(cpu_bus);
+                        self.register.PC += 1;
+                    }
+
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::RTI => {
+                // jimboが工事中
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+
+            // 条件分岐
+            op::OpCode::BCC => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BCS => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BEQ => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BNE => {
+                match (mode, operand) {
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BVC => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BVS => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BPL => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::BMI => {
+                match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            // フラグ操作
+            op::OpCode::CLC => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::SEC => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::CLI => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::SEI => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::CLD => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::SED => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => {}
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::CLV => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => { }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+
+            // その他
+            op::OpCode::BRK => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => { }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+            }
+            op::OpCode::NOP => {
+                match (mode, operand) {
+                    (op::AddressingMode::Implied, Operand::None) => { }
+                    _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+                }
+
+            }
+            // template
+            // op::OpCode::XXX => {
+            //     match (mode, operand) {
+            //         (op::AddressingMode::Immediate, Operand::Byte(byte)) => {}
+            //         (op::AddressingMode::Accumulator, Operand::None) => {}
+            //         (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {}
+            //         (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {}
+            //         (op::AddressingMode::ZeropageY, Operand::Byte(byte)) => {}
+            //         (op::AddressingMode::Relative, Operand::Word(word)) => {}
+            //         (op::AddressingMode::Absolute, Operand::Word(word))=> {}
+            //         (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {}
+            //         (op::AddressingMode::AbsoluteY, Operand::Word(word)) => {}
+            //         (op::AddressingMode::AbsoluteIndirect, Operand::Word(word)) => {}
+            //         (op::AddressingMode::IndirectIndexed, Operand::Word(word)) => {}
+            //         (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {}
+            //         _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
+            //     }
+            // }
         }
         cycles
     }
-}
-
-#[test]
-fn it_works() {
-
 }

@@ -1,62 +1,88 @@
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum AddressingMode {
-    /// Implied: イミディエイト・アドレス指定（Immediate Addressing）
+    /// # Implied
+    /// イミディエイト・アドレス指定（Immediate Addressing）
     /// 2番目のバイトをデータそのものとして使用します。
-    /// [オペコード][データ]
+    /// - バイト形式: [オペコード][データ]
+    /// - 使用するOperand: Operand::None,
     Implied,
 
+    /// # Accumulator
+    /// Aレジスタを操作するため、アドレス操作無し
+    /// - 使用するOperand: Operand::None,
     Accumulator,
+
+    /// - 使用するOperand: Operand::Byte(byte),
+
     Immediate,
 
-    /// Zeropage: [ゼロページ・アドレス指定（Zero Page Addressing）
+    /// # Zeropage
+    /// ゼロページ・アドレス指定（Zero Page Addressing）
     /// 上位アドレスとして$00、下位アドレスとして2番目のバイトを使用し実効アドレスとします。
-    /// [オペコード][下位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス]
+    /// - 使用するOperand: Operand::Byte(byte)
     Zeropage,
 
-    /// ZeropageIndex: ゼロページ・インデックス・アドレス指定（Indexed Zero Page Addressing）
+    /// # ZeropageIndex
+    /// ゼロページ・インデックス・アドレス指定（Indexed Zero Page Addressing）
     /// 上位アドレスとして$00、 下位アドレスとして2番目のバイトにインデックスレジスタ（X,Y）を加算（8） した値を実効アドレスとします。
     /// インデックスレジスタX、Yそれぞれについて、Zero Page, X、Zero Page, Y のアドレッシングモードがあります。
-    /// [オペコード][下位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス]
+    /// - 使用するOperand: Operand::Byte(byte)
     ZeropageX,
+    /// - 使用するOperand: Operand::Byte(byte)
     ZeropageY,
 
-    /// Absolute :アブソリュート・アドレス指定（Absolute Addressing）
+    /// # Absolute
+    /// アブソリュート・アドレス指定（Absolute Addressing）
     /// 2番目のバイトを下位アドレス、 3番目のバイトを上位アドレスとして実効アドレスとします。
-    /// [オペコード][下位アドレス][上位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス][上位アドレス]
+    /// - 使用するOperand: Operand::Word(addr)
     Absolute,
 
-    /// AbsoluteIndex アブソリュート・インデックス・アドレス指定（Indexed Absolute Addressing）
+    /// # AbsoluteIndex
+    /// アブソリュート・インデックス・アドレス指定（Indexed Absolute Addressing）
     /// 2番目のバイトを下位アドレス、3番目のバイトを上位アドレスとして、 このアドレスにインデックスレジスタ（X,Y）を加算（16）したものを実効アドレスとします。
     /// インデックスレジスタX、Yそれぞれ、Absolute, X、Absolute, Y のアドレッシングモードがあります。
-    /// [オペコード][下位アドレス][上位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス][上位アドレス]
+    /// - 使用するOperand: Operand::Word(addr)
     AbsoluteX,
+    /// - 使用するOperand: Operand::Word(addr)
     AbsoluteY,
 
-    /// Relative: リラティブ・アドレス指定（Relative Addressing）
+    /// # Relative
+    /// リラティブ・アドレス指定（Relative Addressing）
     /// 条件分岐命令で使用されます。 次の命令を示すプログラムカウンタに2番目のバイトを加算（符号拡張）した値を実効アドレスとします。
     /// オフセットとして、-128（$80）～+127（$7F）を指定できます。
-    /// [オペコード][オフセット]
+    /// - バイト形式: [オペコード][オフセット]
+    /// - 使用するOperand: Operand::Word(addr)
     Relative,
 
-    /// IndexedIndirect: インデックスインダイレクト・アドレス指定（Indexed Indirect Addressing）
+    /// # IndexedIndirect
+    /// インデックスインダイレクト・アドレス指定（Indexed Indirect Addressing）
     /// 上位アドレスを$00とし、 また2番目のバイトにインデックスレジスタXを加算（8）した値を下位アドレスとします。
     /// このアドレスに格納されている値を実効アドレスの下位バイト、 そしてその次のアドレスに格納されている値を実効アドレスの上位バイトとします。
     /// このインクリメントにおいてキャリーは無視します。
-    /// [オペコード][下位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス]
+    /// - 使用するOperand: Operand::Word(addr)
     IndexedIndirect,
 
-    /// IndirectIndexed: インダイレクト・インデックス・アドレス指定（Indirect Indexed Addressing）
+    /// # IndirectIndexed
+    /// インダイレクト・インデックス・アドレス指定（Indirect Indexed Addressing）
     /// まず上位アドレスを$00とし、下位アドレスとして2番目のバイトを使用します。
     /// このアドレスに格納されている値を次の上位アドレス、 その次のアドレスに格納されている値を次の下位アドレスとします。
     /// このときのインクリメントにおけるキャリーは無視します。 得られたアドレスにインデックスレジスタYを加算（16）したものを実効アドレスとします。
-    /// [オペコード][下位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス]
+    /// - 使用するOperand: Operand::Word(addr)
     IndirectIndexed,
 
-    /// AbsoluteIndirect: アブソリュート・インダイレクト・アドレス指定（Absolute Indirect Addressing）
+    /// # AbsoluteIndirect
+    /// アブソリュート・インダイレクト・アドレス指定（Absolute Indirect Addressing）
     /// 2、3番目のバイトで示されるアドレスに格納されている値を実効アドレスの下位バイト、 その次のアドレスに格納されている値を実効アドレスの上位バイトとします。
     /// このインクリメントで下位バイトからのキャリーは無視します。
-    /// [オペコード][下位アドレス][上位アドレス]
+    /// - バイト形式: [オペコード][下位アドレス][上位アドレス]
+    /// - 使用するOperand: Operand::Word(addr)
     AbsoluteIndirect,
 }
 
