@@ -3,14 +3,13 @@ use crate::wram;
 
 /// CpuBus は cpuから他のデバイスにアクセスするためのもの
 pub struct CpuBus {
-    // TODO:それぞれの変数はu8ではなく構造体
     wram: wram::WRAM,
+    pub ppu: ppu::PPU,
     // extend_ram
     // extend_rom
     // prog_rom1
     // prog_rom2
     // pro: u8,
-    pub ppu: ppu::PPU,
     // apu: u8,
     // keypad: u8,
     // dma: u8,

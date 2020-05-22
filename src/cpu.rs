@@ -134,8 +134,18 @@ impl Cpu {
         cpu_bus.read(self.register.SP)
     }
 
-    fn popStatus(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
-        unimplemented!()
+    fn pop_status(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
+        let status = self.stack_pop(cpu_bus);
+        self.set_flags(status);
+    }
+    fn push_status(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
+        let flags = self.get_flags();
+        self.stack_push(cpu_bus, flags);
+    }
+
+    fn popPC(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
+        self.register.PC = self.stack_pop(cpu_bus) as u16;
+        self.register.PC += (self.stack_pop(cpu_bus) as u16).rotate_left(8);
     }
 
     /// フラグレジスタ
@@ -161,6 +171,21 @@ impl Cpu {
         self.register.P.zero = (flags & (1 << 1)) != 0;
         self.register.P.carry = (flags & 1) != 0;
     }
+
+    fn pagesDiffer(a: u16, b: u16) -> bool {
+        return a&0xFF00 != b&0xFF00;
+    }
+
+    // adds a cycle for taking a branch
+    fn addBranchCycles(&mut self, addr: u16, mut cycles: u8) -> u8 {
+        cycles += 1;
+        if Self::pagesDiffer(self.register.PC, addr) {
+            cycles += 1;
+        }
+        cycles
+    }
+
+
 
 
     /// fetch_operandはアドレッシングモードからアドレスを返す
@@ -224,7 +249,7 @@ impl Cpu {
         }
     }
 
-    fn exec(&mut self, op::Instruction(opcode, mode, cycles): op::Instruction, operand: Operand, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
+    fn exec(&mut self, op::Instruction(opcode, mode, mut cycles): op::Instruction, operand: Operand, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
         match opcode {
             // 転送命令
             // see <http://hp.vector.co.jp/authors/VA042397/nes/6502.html#translate>
@@ -349,7 +374,7 @@ impl Cpu {
             op::OpCode::TXA => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        self.register.Y = self.register.A;
+                        self.register.A = self.register.X;
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -415,6 +440,7 @@ impl Cpu {
                         let result = self.register.A as u16 + byte as u16 + self.register.P.carry as u16;
                         // N V Z C
                         // FIXME: 多分バグらせ侍
+                        // TODO: オーバフローのフラグ治す
                         // over u8
                         self.register.P.carry = result > 0x00ffu16;
                         // タブンチガウ
@@ -957,101 +983,171 @@ impl Cpu {
                 }
             }
             op::OpCode::RTI => {
-                // jimboが工事中
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.pop_status(cpu_bus);
+                        self.popPC(cpu_bus);
+                        // ↓ jsの人はこのようにが仕様にないし、goの人もやっていない
+                        // self.register.P.reserved = true;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
 
             // 条件分岐
+
+            // Branch if Carry Clear
             op::OpCode::BCC => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if !self.register.P.carry {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Carry set
             op::OpCode::BCS => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if self.register.P.carry {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Equal
             op::OpCode::BEQ => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if self.register.P.zero {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Not Equal
             op::OpCode::BNE => {
                 match (mode, operand) {
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if !self.register.P.zero {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Overflow Clear
             op::OpCode::BVC => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if !self.register.P.overflow {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Overflow Set
             op::OpCode::BVS => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if self.register.P.overflow {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Positive
             op::OpCode::BPL => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if !self.register.P.negative {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+            // Branch if Minus
             op::OpCode::BMI => {
                 match (mode, operand) {
-                    (op::AddressingMode::Relative, Operand::Word(word)) => {}
+                    (op::AddressingMode::Relative, Operand::Word(word)) => {
+                        if self.register.P.negative {
+                            self.register.PC = word;
+                            cycles += self.addBranchCycles(word, cycles);
+                        }
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
+
             // フラグ操作
             op::OpCode::CLC => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.carry = false;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
             op::OpCode::SEC => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.carry = true;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
             op::OpCode::CLI => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.interrupt = false;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
             op::OpCode::SEI => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.interrupt = true;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
             op::OpCode::CLD => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.interrupt = false;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
             op::OpCode::SED => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => {}
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.interrupt = true;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
             op::OpCode::CLV => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => { }
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        self.register.P.overflow = false;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
@@ -1059,7 +1155,20 @@ impl Cpu {
             // その他
             op::OpCode::BRK => {
                 match (mode, operand) {
-                    (op::AddressingMode::Implied, Operand::None) => { }
+                    (op::AddressingMode::Implied, Operand::None) => {
+                        let old_interrupt = self.register.P.interrupt;
+                        self.register.PC += 1;
+                        self.stack_push(cpu_bus, (self.register.PC >> 8) as u8);
+                        self.stack_push(cpu_bus, (self.register.PC & 0xFF)as u8);
+                        self.register.P.breakm = true;
+                        self.push_status(cpu_bus);
+                        self.register.P.interrupt = true;
+                        if !old_interrupt {
+                            let addr: u16 = cpu_bus.read(0xfffe) as u16 | ((cpu_bus.read(0xffff) as u16) << 8);
+                            self.register.PC = addr;
+                        }
+                        self.register.PC -= 1;
+                    }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
             }
@@ -1068,7 +1177,6 @@ impl Cpu {
                     (op::AddressingMode::Implied, Operand::None) => { }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
-
             }
             // template
             // op::OpCode::XXX => {
