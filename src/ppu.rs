@@ -7,55 +7,56 @@ struct Register {
     /// - $2000
     /// - VPHB SINN
 	/// - NMI enable (V), PPU master/slave (P), sprite height (H), background tile select (B), sprite tile select (S), increment mode (I), nametable select (NN)
-    PPUCTRL: u8,
+    ppuctrl: u8,
     /// - $2001
     /// - BGRs bMmG
     /// - color emphasis (BGR), sprite enable (s), background enable (b), sprite left column enable (M), background left column enable (m), greyscale (G)
-    PPUMASK: u8,
+    ppumask: u8,
     /// - $2002
     /// - VSO- ----
     /// - vblank (V), sprite 0 hit (S), sprite overflow (O); read resets write pair for $2005/$2006
-    PPUSTATUS: u8,
+    ppustatus: u8,
     /// - $2003
     /// - aaaa aaaa
     /// - OAM read/write address
-    OAMADDR: u8,
+    oamaddr: u8,
     /// - $2004
     /// - dddd dddd
     /// - OAM data read/write
-    OAMDATA	: u8,
+    oamdata	: u8,
     /// - $2005
     /// - xxxx xxxx
     /// - fine scroll position (two writes: X scroll, Y scroll)
-    PPUSCROLL: u8,
+    ppuscroll: u8,
     /// - $2006
     /// - aaaa aaaa
     /// - PPU read/write address (two writes: most significant byte, least significant byte)
-    PPUADDR: u8,
+    ppuaddr: u8,
     /// - $2007
     /// - dddd dddd
     /// - PPU data read/write
-    PPUDATA: u8,
+    ppudata: u8,
 }
 
 impl PPU {
     pub fn new() -> PPU {
         PPU {
             register: Register{
-                PPUCTRL: 0,
-                PPUMASK: 0,
-                PPUSTATUS: 0,
-                OAMADDR: 0,
-                OAMDATA: 0,
-                PPUSCROLL: 0,
-                PPUADDR: 0,
-                PPUDATA: 0,
+                ppuctrl: 0,
+                ppumask: 0,
+                ppustatus: 0,
+                oamaddr: 0,
+                oamdata: 0,
+                ppuscroll: 0,
+                ppuaddr: 0,
+                ppudata: 0,
             }
         }
     }
     // cyclesはppuが実行していいサイクル数
     pub fn run(&mut self, cycles: usize) {
-        unimplemented!()
+        let mut cycles = cycles;
+        unimplemented!("dont run");
     }
 }
 

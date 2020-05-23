@@ -20,7 +20,7 @@ impl Register {
             Y: 0x00u8,
             S: 0x00u8,
             P: StatusRegister::new(),
-            PC: 0x0000u16,
+            PC: 0x8000u16,
             SP: 0x01ffu16,
         }
     }
@@ -106,6 +106,7 @@ impl Cpu {
         let opcode = self.fetch(cpu_bus);
         let instruction = op::decode_op(opcode);
         let operand = self.fetch_operand(instruction.1, cpu_bus);
+        dbg!(instruction, operand);
         self.exec(instruction, operand, cpu_bus)
     }
 
@@ -124,6 +125,10 @@ impl Cpu {
     /// スタックにプッシュ(下方向に伸びる)
     /// see <https://pgate1.at-ninja.jp/NES_on_FPGA/nes_cpu.htm#stack>
     fn stack_push(&mut self, cpu_bus: &mut cpu_bus::CpuBus, data: u8) {
+        if self.register.SP == 0 {
+            panic!("Stack Overflow");
+        }
+
         cpu_bus.write(self.register.SP, data);
         self.register.SP -= 1;
     }
@@ -143,7 +148,7 @@ impl Cpu {
         self.stack_push(cpu_bus, flags);
     }
 
-    fn popPC(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
+    fn pop_pc(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
         self.register.PC = self.stack_pop(cpu_bus) as u16;
         self.register.PC += (self.stack_pop(cpu_bus) as u16).rotate_left(8);
     }
@@ -194,7 +199,6 @@ impl Cpu {
     fn fetch_operand(&mut self, mode: op::AddressingMode, cpu_bus: &mut cpu_bus::CpuBus) -> Operand {
 
         // TODO: テストをしよう
-        // TODO: u8とu16の変換が問題ないかを確認する
         match mode {
             op::AddressingMode::Accumulator => Operand::None,
             op::AddressingMode::Implied => Operand::None,
@@ -436,16 +440,9 @@ impl Cpu {
             op::OpCode::ADC => {
                 match (mode, operand) {
                     (op::AddressingMode::Immediate, Operand::Byte(byte)) => {
-                        // calc on u16
                         let result = self.register.A as u16 + byte as u16 + self.register.P.carry as u16;
-                        // N V Z C
-                        // FIXME: 多分バグらせ侍
-                        // TODO: オーバフローのフラグ治す
-                        // over u8
+                        self.register.P.overflow = !(((self.register.A ^ byte) & 0x80) != 0) && (((self.register.A as u16 ^ result) & 0x80)) != 0;
                         self.register.P.carry = result > 0x00ffu16;
-                        // タブンチガウ
-                        self.register.P.overflow = self.register.P.carry;
-                        // u16 -> u8
                         self.register.A = (result & 0xff) as u8;
                         self.register.P.negative = self.register.A & 0b10000000 != 0;
                         self.register.P.zero = self.register.A == 0;
@@ -457,7 +454,7 @@ impl Cpu {
                         let result = self.register.A as u16 + data as u16 + self.register.P.carry as u16;
                         // N V Z C
                         self.register.P.carry = result > 0x00ffu16;
-                        self.register.P.overflow = self.register.P.carry;
+                        self.register.P.overflow = !(((self.register.A ^ data) & 0x80) != 0) && (((self.register.A as u16 ^ result) & 0x80)) != 0;
                         self.register.A = (result & 0xff) as u8;
                         self.register.P.negative =  self.register.A & 0b10000000 != 0;
                         self.register.P.zero = self.register.A == 0;
@@ -472,7 +469,7 @@ impl Cpu {
                         let result = self.register.A as u16 + data as u16 + self.register.P.carry as u16;
                         // N V Z C
                         self.register.P.carry = result > 0x00ffu16;
-                        self.register.P.overflow = self.register.P.carry;
+                        self.register.P.overflow = !(((self.register.A ^ data) & 0x80) != 0) && (((self.register.A as u16 ^ result) & 0x80)) != 0;
                         self.register.A = (result & 0xff) as u8;
                         self.register.P.negative =  self.register.A & 0b10000000 != 0;
                         self.register.P.zero = self.register.A & 0b10000000 != 0;
@@ -986,7 +983,7 @@ impl Cpu {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
                         self.pop_status(cpu_bus);
-                        self.popPC(cpu_bus);
+                        self.pop_pc(cpu_bus);
                         // ↓ jsの人はこのようにが仕様にないし、goの人もやっていない
                         // self.register.P.reserved = true;
                     }

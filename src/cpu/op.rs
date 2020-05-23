@@ -190,7 +190,7 @@ const cycles: [u8; 0x100] = [
 pub fn decode_op(op: u8) -> Instruction {
     match op {
         // 0x0X
-        0x00 => Instruction(OpCode::BRK, AddressingMode::Immediate, cycles[op as usize]),
+        0x00 => Instruction(OpCode::BRK, AddressingMode::Implied, cycles[op as usize]),
         0x01 => Instruction(OpCode::ORA, AddressingMode::IndexedIndirect, cycles[op as usize]),
         0x05 => Instruction(OpCode::ORA, AddressingMode::Zeropage, cycles[op as usize]),
         0x06 => Instruction(OpCode::ASL, AddressingMode::Zeropage, cycles[op as usize]),

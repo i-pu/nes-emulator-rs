@@ -22,23 +22,21 @@ impl NES {
         let mut f = File::open(file)?;
         let mut program: Vec<u8> = Vec::new();
         f.read_to_end(&mut program)?;
-        let (prog, char) = NES::parse(program).unwrap();
+        let (prog, _) = NES::parse(program).unwrap();
 
         dbg!(&prog[..20]);
 
 
-        let mut cpu_bus = {
+        let cpu_bus = {
             // すべてのデバイスの初期化
 
             // wramの初期化
-            let mut wram = wram::WRAM::new();
+            let wram = wram::WRAM::new();
 
             // ppuの初期化
-            let mut ppu = ppu::PPU::new();
+            let ppu = ppu::PPU::new();
 
-            // TODO: progromの初期化
-
-            cpu_bus::CpuBus::new(wram, ppu)
+            cpu_bus::CpuBus::new(wram, ppu, prog)
         };
 
         Ok(NES {
@@ -48,13 +46,17 @@ impl NES {
     }
 
     pub fn run(mut self) {
+        let hz = 10u32; // ヘルツ
         loop {
             // cycles: cpuが何サイクル回ったか
             let mut cycles: usize = 0;
 
             // cpu実行
             cycles += self.cpu.run(&mut self.cpu_bus) as usize;
-            self.cpu_bus.ppu.run(cycles * 3);
+            // NOT IMPLEMENTED
+            // self.cpu_bus.ppu.run(cycles * 3);
+            // 1ナノ秒 = 0.000 000 001 秒
+            std::thread::sleep(std::time::Duration::new(0, 1_000_000_000 / hz));
         }
     }
 
