@@ -1,5 +1,16 @@
 
 #[derive(PartialEq, Eq, Copy, Clone, Debug)]
+pub enum Interrupt {
+    /// ハードウェアからの特殊信号が入った時(per 1/60s)
+    NMI,
+    /// 電源投入時。リセットボタンの押下時
+    RESET,
+    /// ハードウェアからの信号、もしくはBRK命令時
+    IRQ,
+    BRK,
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
 pub enum AddressingMode {
     /// # Implied
     /// イミディエイト・アドレス指定（Immediate Addressing）
@@ -186,6 +197,8 @@ const cycles: [u8; 0x100] = [
     /*0xF0*/ 2, 5, 2, 8, 4, 4, 6, 6, 2, 4, 2, 7, 4, 4, 7, 7,
 ];
 
+
+// TODO: メモリロードしたときにサイクル数増えたりするやつがあるので対応する
 /// see <https://qiita.com/bokuweb/items/1575337bef44ae82f4d3#%E5%91%BD%E4%BB%A4%E3%82%BB%E3%83%83%E3%83%88>
 pub fn decode_op(op: u8) -> Instruction {
     match op {
@@ -246,14 +259,14 @@ pub fn decode_op(op: u8) -> Instruction {
         0x4e => Instruction(OpCode::LSR, AddressingMode::Absolute, cycles[op as usize]),
 
         // 0x5X
-        0x50 => Instruction(OpCode::BMI, AddressingMode::Relative, cycles[op as usize]),
-        0x51 => Instruction(OpCode::AND, AddressingMode::IndirectIndexed, cycles[op as usize]),
-        0x55 => Instruction(OpCode::AND, AddressingMode::ZeropageX, cycles[op as usize]),
-        0x56 => Instruction(OpCode::ROL, AddressingMode::ZeropageX, cycles[op as usize]),
-        0x58 => Instruction(OpCode::SEC, AddressingMode::Implied, cycles[op as usize]),
-        0x59 => Instruction(OpCode::AND, AddressingMode::AbsoluteY, cycles[op as usize]),
-        0x5d => Instruction(OpCode::AND, AddressingMode::AbsoluteX, cycles[op as usize]),
-        0x5e => Instruction(OpCode::ROL, AddressingMode::AbsoluteX, cycles[op as usize]),
+        0x50 => Instruction(OpCode::BVC, AddressingMode::Relative, cycles[op as usize]),
+        0x51 => Instruction(OpCode::EOR, AddressingMode::IndirectIndexed, cycles[op as usize]),
+        0x55 => Instruction(OpCode::EOR, AddressingMode::ZeropageX, cycles[op as usize]),
+        0x56 => Instruction(OpCode::LSR, AddressingMode::ZeropageX, cycles[op as usize]),
+        0x58 => Instruction(OpCode::CLI, AddressingMode::Implied, cycles[op as usize]),
+        0x59 => Instruction(OpCode::EOR, AddressingMode::AbsoluteY, cycles[op as usize]),
+        0x5d => Instruction(OpCode::EOR, AddressingMode::AbsoluteX, cycles[op as usize]),
+        0x5e => Instruction(OpCode::LSR, AddressingMode::AbsoluteX, cycles[op as usize]),
 
         // 0x6X
         0x60 => Instruction(OpCode::RTS, AddressingMode::Implied, cycles[op as usize]),
@@ -263,7 +276,7 @@ pub fn decode_op(op: u8) -> Instruction {
         0x68 => Instruction(OpCode::PLA, AddressingMode::Implied, cycles[op as usize]),
         0x69 => Instruction(OpCode::ADC, AddressingMode::Immediate, cycles[op as usize]),
         0x6a => Instruction(OpCode::ROR, AddressingMode::Accumulator, cycles[op as usize]),
-        0x6c => Instruction(OpCode::JMP, AddressingMode::IndirectIndexed, cycles[op as usize]),
+        0x6c => Instruction(OpCode::JMP, AddressingMode::AbsoluteIndirect, cycles[op as usize]),
         0x6d => Instruction(OpCode::ADC, AddressingMode::Absolute, cycles[op as usize]),
         0x6e => Instruction(OpCode::ROR, AddressingMode::Absolute, cycles[op as usize]),
 
@@ -278,24 +291,24 @@ pub fn decode_op(op: u8) -> Instruction {
         0x7e => Instruction(OpCode::ROR, AddressingMode::AbsoluteX, cycles[op as usize]),
 
         // 0x8X
-        0x81 => Instruction(OpCode::AND, AddressingMode::IndirectIndexed, cycles[op as usize]),
-        0x84 => Instruction(OpCode::AND, AddressingMode::Zeropage, cycles[op as usize]),
-        0x85 => Instruction(OpCode::ROL, AddressingMode::Zeropage, cycles[op as usize]),
-        0x86 => Instruction(OpCode::SEC, AddressingMode::Implied, cycles[op as usize]),
-        0x88 => Instruction(OpCode::AND, AddressingMode::Absolute, cycles[op as usize]),
-        0x8a => Instruction(OpCode::AND, AddressingMode::Absolute, cycles[op as usize]),
-        0x8c => Instruction(OpCode::AND, AddressingMode::Absolute, cycles[op as usize]),
-        0x8d => Instruction(OpCode::AND, AddressingMode::Absolute, cycles[op as usize]),
-        0x8e => Instruction(OpCode::ROL, AddressingMode::Absolute, cycles[op as usize]),
+        0x81 => Instruction(OpCode::STA, AddressingMode::IndexedIndirect, cycles[op as usize]),
+        0x84 => Instruction(OpCode::STY, AddressingMode::Zeropage, cycles[op as usize]),
+        0x85 => Instruction(OpCode::STA, AddressingMode::Zeropage, cycles[op as usize]),
+        0x86 => Instruction(OpCode::STX, AddressingMode::Zeropage, cycles[op as usize]),
+        0x88 => Instruction(OpCode::DEY, AddressingMode::Implied, cycles[op as usize]),
+        0x8a => Instruction(OpCode::TXA, AddressingMode::Implied, cycles[op as usize]),
+        0x8c => Instruction(OpCode::STY, AddressingMode::Absolute, cycles[op as usize]),
+        0x8d => Instruction(OpCode::STA, AddressingMode::Absolute, cycles[op as usize]),
+        0x8e => Instruction(OpCode::STX, AddressingMode::Absolute, cycles[op as usize]),
 
         // 0x9X
         0x90 => Instruction(OpCode::BCC, AddressingMode::Relative, cycles[op as usize]),
         0x91 => Instruction(OpCode::STA, AddressingMode::IndirectIndexed, cycles[op as usize]),
         0x94 => Instruction(OpCode::STY, AddressingMode::ZeropageX, cycles[op as usize]),
-        0x95 => Instruction(OpCode::STA, AddressingMode::ZeropageY, cycles[op as usize]),
+        0x95 => Instruction(OpCode::STA, AddressingMode::ZeropageX, cycles[op as usize]),
         0x96 => Instruction(OpCode::STX, AddressingMode::ZeropageY, cycles[op as usize]),
         0x98 => Instruction(OpCode::TYA, AddressingMode::Implied, cycles[op as usize]),
-        0x99 => Instruction(OpCode::STA, AddressingMode::IndirectIndexed, cycles[op as usize]),
+        0x99 => Instruction(OpCode::STA, AddressingMode::AbsoluteY, cycles[op as usize]),
         0x9a => Instruction(OpCode::TXS, AddressingMode::Implied, cycles[op as usize]),
         0x9d => Instruction(OpCode::STA, AddressingMode::AbsoluteX, cycles[op as usize]),
 
@@ -328,7 +341,7 @@ pub fn decode_op(op: u8) -> Instruction {
 
         // 0xcX
         0xc0 => Instruction(OpCode::CPY, AddressingMode::Immediate, cycles[op as usize]),
-        0xc1 => Instruction(OpCode::CMP, AddressingMode::IndirectIndexed, cycles[op as usize]),
+        0xc1 => Instruction(OpCode::CMP, AddressingMode::IndexedIndirect, cycles[op as usize]),
         0xc4 => Instruction(OpCode::CPY, AddressingMode::Zeropage, cycles[op as usize]),
         0xc5 => Instruction(OpCode::CMP, AddressingMode::Zeropage, cycles[op as usize]),
         0xc6 => Instruction(OpCode::DEC, AddressingMode::Zeropage, cycles[op as usize]),
@@ -344,7 +357,7 @@ pub fn decode_op(op: u8) -> Instruction {
         0xd1 => Instruction(OpCode::CMP, AddressingMode::IndirectIndexed, cycles[op as usize]),
         0xd5 => Instruction(OpCode::CMP, AddressingMode::ZeropageX, cycles[op as usize]),
         0xd6 => Instruction(OpCode::DEC, AddressingMode::ZeropageX, cycles[op as usize]),
-        0xd8 => Instruction(OpCode::CLD, AddressingMode::Immediate, cycles[op as usize]),
+        0xd8 => Instruction(OpCode::CLD, AddressingMode::Implied, cycles[op as usize]),
         0xd9 => Instruction(OpCode::CMP, AddressingMode::AbsoluteY, cycles[op as usize]),
         0xdd => Instruction(OpCode::CMP, AddressingMode::AbsoluteX, cycles[op as usize]),
         0xde => Instruction(OpCode::DEC, AddressingMode::AbsoluteX, cycles[op as usize]),
@@ -357,14 +370,14 @@ pub fn decode_op(op: u8) -> Instruction {
         0xe6 => Instruction(OpCode::INC , AddressingMode::Zeropage, cycles[op as usize]),
         0xe8 => Instruction(OpCode::INX, AddressingMode::Implied, cycles[op as usize]),
         0xe9 => Instruction(OpCode::SBC, AddressingMode::Immediate, cycles[op as usize]),
-        0xea => Instruction(OpCode::NOP, AddressingMode:: Implied, cycles[op as usize]),
+        0xea => Instruction(OpCode::NOP, AddressingMode::Implied, cycles[op as usize]),
         0xec => Instruction(OpCode::CPX, AddressingMode::Absolute, cycles[op as usize]),
         0xed => Instruction(OpCode::SBC, AddressingMode::Absolute, cycles[op as usize]),
         0xee => Instruction(OpCode::INC, AddressingMode::Absolute, cycles[op as usize]),
 
         // 0xfX
         0xf0 => Instruction(OpCode::BEQ, AddressingMode::Relative, cycles[op as usize]),
-        0xf1 => Instruction(OpCode::SBC, AddressingMode::IndexedIndirect, cycles[op as usize]),
+        0xf1 => Instruction(OpCode::SBC, AddressingMode::IndirectIndexed, cycles[op as usize]),
         0xf5 => Instruction(OpCode::SBC, AddressingMode::ZeropageX, cycles[op as usize]),
         0xf6 => Instruction(OpCode::INC, AddressingMode::ZeropageX, cycles[op as usize]),
         0xf8 => Instruction(OpCode::SED, AddressingMode::Implied, cycles[op as usize]),
@@ -372,6 +385,6 @@ pub fn decode_op(op: u8) -> Instruction {
         0xfd => Instruction(OpCode::SBC, AddressingMode::AbsoluteX, cycles[op as usize]),
         0xfe => Instruction(OpCode::INC, AddressingMode::AbsoluteX, cycles[op as usize]),
 
-        _ => panic!("やばいです")
+        _ => panic!("not found op: {:x}", op),
     }
 }

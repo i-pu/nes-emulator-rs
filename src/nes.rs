@@ -1,24 +1,25 @@
-use std::io::prelude::*;
-use std::fs::File;
 use crate::cpu;
-use crate::wram;
 use crate::cpu_bus;
 use crate::ppu;
+use crate::screen;
+use crate::wram;
+use std::cell::RefCell;
+use std::fs::File;
+use std::io::prelude::*;
+use std::rc::{Rc, Weak};
 
 const NES_HEADER_SIZE: usize = 0x0010;
 const PROGRAM_ROM_SIZE: usize = 0x4000;
 const CHARACTER_ROM_SIZE: usize = 0x2000;
 
 pub struct NES {
-    cpu: cpu::Cpu,
-    cpu_bus: cpu_bus::CpuBus,
+    cpu: Rc<RefCell<cpu::Cpu>>,
+    ppu: Rc<RefCell<ppu::Ppu>>,
 }
 
 /// CPUのクロック数の管理やppuのクロック数の管理をする
 impl NES {
-    pub fn new(file: &str) ->  Result<Self, Box<dyn std::error::Error>> {
-
-
+    pub fn new(file: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let mut f = File::open(file)?;
         let mut program: Vec<u8> = Vec::new();
         f.read_to_end(&mut program)?;
@@ -26,35 +27,33 @@ impl NES {
 
         dbg!(&prog[..20]);
 
+        // wramの初期化
+        let wram = wram::WRAM::new();
+        // ppuの初期化
+        let screen = screen::Screen::new();
+        let ppu = Rc::new(RefCell::new(ppu::Ppu::new(screen, Weak::new())));
 
-        let cpu_bus = {
-            // すべてのデバイスの初期化
+        let cpu_bus = cpu_bus::CpuBus::new(wram, ppu.clone(), prog);
+        let mut cpu = Rc::new(RefCell::new(cpu::Cpu::new(cpu_bus)));
+        ppu.borrow_mut().add_cpu(cpu.clone());
 
-            // wramの初期化
-            let wram = wram::WRAM::new();
-
-            // ppuの初期化
-            let ppu = ppu::PPU::new();
-
-            cpu_bus::CpuBus::new(wram, ppu, prog)
-        };
-
-        Ok(NES {
-            cpu: cpu::Cpu::new(),
-            cpu_bus: cpu_bus,
-        })
+        Ok(NES { cpu, ppu })
     }
 
     pub fn run(mut self) {
-        let hz = 10u32; // ヘルツ
+        // 60fps
+        // let hz = 1_790_000u32;
+        // 1fps
+        let hz = 179_000u32 / 6;
+        // let hz = 30u32; // ヘルツ
         loop {
             // cycles: cpuが何サイクル回ったか
             let mut cycles: usize = 0;
 
             // cpu実行
-            cycles += self.cpu.run(&mut self.cpu_bus) as usize;
-            // NOT IMPLEMENTED
-            // self.cpu_bus.ppu.run(cycles * 3);
+            cycles += self.cpu.borrow_mut().run() as usize;
+            // ppu 実行
+            self.ppu.borrow_mut().run(3 * cycles);
             // 1ナノ秒 = 0.000 000 001 秒
             std::thread::sleep(std::time::Duration::new(0, 1_000_000_000 / hz));
         }
@@ -77,12 +76,15 @@ impl NES {
         //   const mapper = (((nes[6] & 0xF0) >> 4) | nes[7] & 0xF0);
         //   log.info('mapper', mapper);
         let character_rom_start = NES_HEADER_SIZE + program_rom_page as usize * PROGRAM_ROM_SIZE;
-        let  character_rom_end = character_rom_start + character_rom_page as usize * CHARACTER_ROM_SIZE;
-        Ok((binary[NES_HEADER_SIZE..character_rom_start].to_vec(),  binary[character_rom_start..character_rom_end].to_vec()))
+        let character_rom_end = character_rom_start + character_rom_page as usize * CHARACTER_ROM_SIZE;
+        let prog = binary[NES_HEADER_SIZE..character_rom_start].to_vec();
+        // TODO: progの長さが0x8000以下だと割り込みベクタがかけることになるのでおかしくなるかも
+        Ok((
+            prog,
+            binary[character_rom_start..character_rom_end].to_vec(),
+        ))
     }
 }
 
 #[cfg(test)]
-mod tests {
-
-}
+mod tests {}

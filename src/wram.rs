@@ -7,7 +7,7 @@ use std::ops::{Index, IndexMut};
 +----------------+----------------------------+----------------+
 | 0x0000-0x07FF  |  RAM                       |                |
 | 0x0800-0x1FFF  |  reserve                   | 0x0000-0x07FF  |
-| 0x2000-0x2007  |  I/O(PPU)                  |                |
+| 0x2000-0x2007  |  I/O(Ppu)                  |                |
 | 0x2008-0x3FFF  |  reserve                   | 0x2000-0x2007  |
 | 0x4000-0x401F  |  I/O(APU, etc)             |                |
 | 0x4020-0x5FFF  |  ex RAM                    |                |
@@ -28,12 +28,9 @@ const WRAM_MIRROR_SIZE: usize = 0x1800;
 /// ```
 /// wram[0x8000]
 /// $0100～$01FFがスタックに相当する
-/// FIXME: 今の所memoryにしかアクセスできない
 pub struct WRAM {
     /// 0x0000~0x07FF
     memory: [u8; WRAM_SIZE],
-    /// 0x0800~0x1FFF
-    mirror_memory: [u8; WRAM_MIRROR_SIZE],
 }
 
 impl Index<usize> for WRAM {
@@ -53,18 +50,6 @@ impl WRAM {
     pub fn new() -> Self {
         WRAM {
             memory: [0; WRAM_SIZE],
-            mirror_memory: [0; WRAM_MIRROR_SIZE],
-        }
-    }
-}
-
-pub struct WRAMMirror {
-    memory: [u8; WRAM_MIRROR_SIZE],
-}
-impl WRAMMirror {
-    pub fn new() -> Self {
-        WRAMMirror {
-            memory: [0; WRAM_MIRROR_SIZE],
         }
     }
 }

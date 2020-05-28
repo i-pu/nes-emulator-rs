@@ -1,6 +1,6 @@
-use crate::cpu_bus;
+use crate::cpu_bus::{self};
 
-mod op;
+pub mod op;
 mod tests;
 struct Register {
     A: u8,	                // 8bit	アキュームレータ	汎用演算
@@ -73,6 +73,20 @@ impl StatusRegister {
     }
 }
 
+struct Interrupts {
+    nmi: bool,
+    irq: bool,
+}
+
+impl Interrupts {
+    pub fn new() -> Self {
+        Self {
+            nmi: false,
+            irq: false,
+        }
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 enum Operand {
     None,
@@ -90,30 +104,48 @@ pub struct Cpu {
     /// 5. 命令を実行
     /// 6. 1に戻る
     register: Register,
+
+    interrupts: Interrupts,
+
+    cpu_bus: cpu_bus::CpuBus,
 }
 
 impl Cpu {
     /// レジスタの初期化
-    pub fn new() -> Cpu {
+    pub fn new(cpu_bus: cpu_bus::CpuBus) -> Cpu {
         Cpu {
             register: Register::new(),
+            interrupts: Interrupts::new(),
+            cpu_bus,
         }
     }
 
     /// CPUの実行
     /// 実行タイミング調整のために実行にかかったサイクル数を返す
-    pub fn run(&mut self, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
-        let opcode = self.fetch(cpu_bus);
+    pub fn run(&mut self) -> u8 {
+        // process interruption
+        let pc = self.register.PC;
+        // 僕ウェブさんはinterruptsを消費していた
+        if self.interrupts.nmi {
+            // TODO: debugのときスタックの中身が見たい
+            self.interrupt(op::Interrupt::NMI);
+        }
+        if self.interrupts.irq {
+            self.interrupt(op::Interrupt::IRQ);
+        }
+
+        let opcode = self.fetch();
         let instruction = op::decode_op(opcode);
-        let operand = self.fetch_operand(instruction.1, cpu_bus);
-        dbg!(instruction, operand);
-        self.exec(instruction, operand, cpu_bus)
+        let operand = self.fetch_operand(instruction.1);
+        // println!("PC {:x}: {:?} {:?}", pc, instruction.0, instruction.1);
+        self.exec(instruction, operand)
     }
 
     /// cpu_busからbyteデータをfetchするレジスタとプラグラムカウンタを上げる
-    fn fetch(&mut self, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
-        let byte = cpu_bus.read(self.register.PC);
+    fn fetch(&mut self) -> u8 {
+        let byte = self.cpu_bus.read(self.register.PC);
         self.register.PC += 1;
+        // let byte = self.cpu_bus.read(self.register.PC++);
         byte
     }
 
@@ -124,33 +156,84 @@ impl Cpu {
 
     /// スタックにプッシュ(下方向に伸びる)
     /// see <https://pgate1.at-ninja.jp/NES_on_FPGA/nes_cpu.htm#stack>
-    fn stack_push(&mut self, cpu_bus: &mut cpu_bus::CpuBus, data: u8) {
+    // TODO: トップまでいったら一周してもとに戻る説確認
+    fn stack_push(&mut self, data: u8) {
         if self.register.SP == 0 {
             panic!("Stack Overflow");
         }
 
-        cpu_bus.write(self.register.SP, data);
+        self.cpu_bus.write(self.register.SP, data);
         self.register.SP -= 1;
     }
 
     /// スタックからポップ
-    fn stack_pop(&mut self, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
+    fn stack_pop(&mut self) -> u8 {
         self.register.SP += 1;
-        cpu_bus.read(self.register.SP)
+        self.cpu_bus.read(self.register.SP)
     }
 
-    fn pop_status(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
-        let status = self.stack_pop(cpu_bus);
+    fn pop_status(&mut self) {
+        let status = self.stack_pop();
         self.set_flags(status);
     }
-    fn push_status(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
+
+    fn push_status(&mut self) {
         let flags = self.get_flags();
-        self.stack_push(cpu_bus, flags);
+        self.stack_push(flags);
     }
 
-    fn pop_pc(&mut self, cpu_bus: &mut cpu_bus::CpuBus) {
-        self.register.PC = self.stack_pop(cpu_bus) as u16;
-        self.register.PC += (self.stack_pop(cpu_bus) as u16).rotate_left(8);
+    fn pop_pc(&mut self) {
+        self.register.PC = self.stack_pop() as u16;
+        let a = self.stack_pop() as u16;
+        self.register.PC += (a).rotate_left(8);
+    }
+
+    /// NMI flag
+    pub fn set_nmi_flag(&mut self) {
+        self.interrupts.nmi = true;
+    }
+
+    /// 割り込み
+    /// TODO: popstatus誰がいつ実行するのか 割り込みベクタの飛んだ先のアドレスでrtiが実行されるのでは?
+    pub fn interrupt(&mut self, interruption: op::Interrupt) {
+        // nested interrupt not allowed
+        if self.register.P.interrupt && (interruption == op::Interrupt::IRQ || interruption == op::Interrupt::BRK) {
+            return
+        }
+
+        // NMI: deassert
+        if interruption == op::Interrupt::NMI {
+            // deassert
+            self.interrupts.nmi = false;
+            // B
+            self.register.P.breakm = false;
+        }
+
+        if interruption != op::Interrupt::RESET {
+            // PC.low, PC.high, P 退避
+            self.stack_push((self.register.PC >> 8) as u8);
+            self.stack_push((self.register.PC & 0xff) as u8);
+            let flags = self.get_flags();
+            self.stack_push(flags);
+        }
+
+        // assert interrupt flag
+        self.register.P.interrupt = true;
+
+        let addr: u16 = match interruption {
+            op::Interrupt::NMI => {
+                dbg!("called interrupt NMI");
+                0xfffa
+            }
+            op::Interrupt::RESET => 0xfffc,
+            op::Interrupt::IRQ | op::Interrupt::BRK => 0xfffe,
+        };
+
+        // jump by addr
+        let low = self.cpu_bus.read(addr);
+        let hi = self.cpu_bus.read(addr + 1);
+        // [hi low]: u16
+        self.register.PC = (hi as u16) << 8 | (low as u16);
     }
 
     /// フラグレジスタ
@@ -177,83 +260,97 @@ impl Cpu {
         self.register.P.carry = (flags & 1) != 0;
     }
 
-    fn pagesDiffer(a: u16, b: u16) -> bool {
-        return a&0xFF00 != b&0xFF00;
+    fn pages_diff(a: u16, b: u16) -> bool {
+        return a & 0xFF00 != b & 0xFF00;
     }
 
     // adds a cycle for taking a branch
-    fn addBranchCycles(&mut self, addr: u16, mut cycles: u8) -> u8 {
+    fn add_branch_cycles(&mut self, addr: u16, mut cycles: u8) -> u8 {
         cycles += 1;
-        if Self::pagesDiffer(self.register.PC, addr) {
+        if Self::pages_diff(self.register.PC, addr) {
             cycles += 1;
         }
         cycles
     }
 
-
-
-
     /// fetch_operandはアドレッシングモードからアドレスを返す
     /// アドレスを返さない場合があるのでそのときはNoneを返す
     /// 返り値のu16はほとんどがu8で済むが一部のアドレッシングモードにおいてu16を返す必要があります
-    fn fetch_operand(&mut self, mode: op::AddressingMode, cpu_bus: &mut cpu_bus::CpuBus) -> Operand {
+    fn fetch_operand(&mut self, mode: op::AddressingMode) -> Operand {
 
         // TODO: テストをしよう
         match mode {
             op::AddressingMode::Accumulator => Operand::None,
             op::AddressingMode::Implied => Operand::None,
-            op::AddressingMode::Immediate => Operand::Byte(self.fetch(cpu_bus)),
-            op::AddressingMode::Zeropage => Operand::Byte(self.fetch(cpu_bus)),
+            op::AddressingMode::Immediate => Operand::Byte(self.fetch()),
+            op::AddressingMode::Zeropage => Operand::Byte(self.fetch()),
             op::AddressingMode::ZeropageX => {
-                let addr = self.fetch(cpu_bus);
+                let addr = self.fetch();
                 Operand::Byte(addr.wrapping_add(self.register.X))
             },
             op::AddressingMode::ZeropageY => {
-                let addr = self.fetch(cpu_bus);
+                let addr = self.fetch();
                 Operand::Byte(addr.wrapping_add(self.register.Y))
             },
             op::AddressingMode::IndexedIndirect => {
-                let base_addr: u16 = self.fetch(cpu_bus).wrapping_add(self.register.X) as u16;
-                let addr: u16 = cpu_bus.read(base_addr) as u16 + (cpu_bus.read((base_addr + 1) & 0x00ff) as u16 ) << 8;
+                let base_addr: u16 = self.fetch().wrapping_add(self.register.X) as u16;
+                let low = self.cpu_bus.read(base_addr) as u16;
+                let hi = (self.cpu_bus.read((base_addr + 1) & 0x00ff)) as u16;
+                let addr = (hi << 8) | low;
                 Operand::Word(addr)
             },
             op::AddressingMode::IndirectIndexed => {
-                let addr_or_data: u16 = self.fetch(cpu_bus) as u16;
+                let addr_or_data: u16 = self.fetch() as u16;
                 // 0ページ内での操作だと思うので、& 0x00ffはキャリーを無視させるため
-                let base_addr: u16 = cpu_bus.read(addr_or_data) as u16 + (cpu_bus.read((addr_or_data + 1) & 0x00ff) as u16) << 8;
+                let low = self.cpu_bus.read(addr_or_data) as u16;
+                let hi = (self.cpu_bus.read((addr_or_data + 1) & 0x00ff)) as u16;
+                let base_addr = (hi << 8) | low;
                 let addr = base_addr + self.register.Y as u16;
                 Operand::Word(addr)
             },
             op::AddressingMode::AbsoluteIndirect => {
                 // 0ページ内での操作だと思うので、& 0x00ffはキャリーを無視させるため
-                let addr: u16 = self.fetch(cpu_bus) as u16 + (self.fetch(cpu_bus) as u16) << 8;
-                let data: u16 = cpu_bus.read(addr) as u16 + (cpu_bus.read((addr + 1) & 0x00ff) as u16) << 8;
+                let low = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | low;
+                let low = self.cpu_bus.read(addr) as u16;
+                let hi = self.cpu_bus.read((addr + 1) & 0x00ff) as u16;
+                let data = (hi << 8) | low;
                 Operand::Word(data)
             },
             op::AddressingMode::Absolute => {
                 // [high: 8, low: 8]
-                let addr_or_data = self.fetch(cpu_bus) as u16 + (self.fetch(cpu_bus) as u16) << 8;
+                let low = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr_or_data = (hi << 8) | low;
                 Operand::Word(addr_or_data)
             },
             op::AddressingMode::AbsoluteX => {
                 // [high: 8, low: 8] + X
-                let addr_or_data = self.fetch(cpu_bus) as u16 + (self.fetch(cpu_bus) as u16) << 8;
+                let low = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr_or_data = (hi << 8) | low;
                 Operand::Word(addr_or_data + self.register.X as u16)
             },
             op::AddressingMode::AbsoluteY => {
                 // [high: 8, low: 8] + Y
-                let addr_or_data = self.fetch(cpu_bus) as u16 + (self.fetch(cpu_bus) as u16) << 8;
+                let low = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr_or_data = (hi << 8) | low;
                 Operand::Word(addr_or_data + self.register.Y as u16)
             },
             op::AddressingMode::Relative => {
                 // 符号拡張のためi8にcast
-                let addr = self.fetch(cpu_bus) as i8;
-                Operand::Word(self.register.PC + addr as u16)
+                // NOTE: `u8 as i16` leads to unexpeted result, `u8 as i8 as i16` is correct.
+                let addr = self.fetch() as i8 as i16;
+                let word = (self.register.PC as i16 + addr) as u16;
+                Operand::Word(word)
             },
         }
     }
 
-    fn exec(&mut self, op::Instruction(opcode, mode, mut cycles): op::Instruction, operand: Operand, cpu_bus: &mut cpu_bus::CpuBus) -> u8 {
+    fn exec(&mut self, op::Instruction(opcode, mode, mut cycles): op::Instruction, operand: Operand) -> u8 {
+        // TODO: has_branchフラグをfalseにリセットするのでは?
         match opcode {
             // 転送命令
             // see <http://hp.vector.co.jp/authors/VA042397/nes/6502.html#translate>
@@ -265,14 +362,14 @@ impl Cpu {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageY, Operand::Byte(byte)) => {
-                        self.register.A = cpu_bus.read(byte as u16);
+                        self.register.A = self.cpu_bus.read(byte as u16);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteY, Operand::Word(word)) |
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        self.register.A = cpu_bus.read(word);
+                        self.register.A = self.cpu_bus.read(word);
                     }
                     _ => panic!("そんなアドレッシングモードとオペランドの組み合わせはありません opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -289,11 +386,11 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageY, Operand::Byte(byte)) => {
-                        self.register.X = cpu_bus.read(byte as u16);
+                        self.register.X = self.cpu_bus.read(byte as u16);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteY, Operand::Word(word)) => {
-                        self.register.X = cpu_bus.read(word);
+                        self.register.X = self.cpu_bus.read(word);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -310,11 +407,11 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        self.register.Y = cpu_bus.read(byte as u16);
+                        self.register.Y = self.cpu_bus.read(byte as u16);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        self.register.Y = cpu_bus.read(word);
+                        self.register.Y = self.cpu_bus.read(word);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -327,13 +424,13 @@ impl Cpu {
                 match (mode, operand) {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        cpu_bus.write(byte as u16, self.register.A);
+                        self.cpu_bus.write(byte as u16, self.register.A);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        cpu_bus.write(word, self.register.A);
+                        self.cpu_bus.write(word, self.register.A);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -342,10 +439,10 @@ impl Cpu {
                 match (mode, operand) {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageY, Operand::Byte(byte)) => {
-                        cpu_bus.write(byte as u16, self.register.X);
+                        self.cpu_bus.write(byte as u16, self.register.X);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) => {
-                        cpu_bus.write(word, self.register.X);
+                        self.cpu_bus.write(word, self.register.X);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -354,10 +451,10 @@ impl Cpu {
                 match (mode, operand) {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        cpu_bus.write(byte as u16, self.register.Y);
+                        self.cpu_bus.write(byte as u16, self.register.Y);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) => {
-                        cpu_bus.write(word, self.register.Y);
+                        self.cpu_bus.write(word, self.register.Y);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -449,7 +546,7 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let data = cpu_bus.read(byte as u16);
+                        let data = self.cpu_bus.read(byte as u16);
                         // calc on u16
                         let result = self.register.A as u16 + data as u16 + self.register.P.carry as u16;
                         // N V Z C
@@ -464,7 +561,7 @@ impl Cpu {
                     (op::AddressingMode::AbsoluteY, Operand::Word(word)) |
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
+                        let data = self.cpu_bus.read(word);
                         // calc on u16
                         let result = self.register.A as u16 + data as u16 + self.register.P.carry as u16;
                         // N V Z C
@@ -486,14 +583,14 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        self.register.A &= cpu_bus.read(byte as u16);
+                        self.register.A &= self.cpu_bus.read(byte as u16);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteY, Operand::Word(word))|
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        self.register.A &= cpu_bus.read(word);
+                        self.register.A &= self.cpu_bus.read(word);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -509,14 +606,14 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        self.register.A |= cpu_bus.read(byte as u16);
+                        self.register.A |= self.cpu_bus.read(byte as u16);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteY, Operand::Word(word))|
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        self.register.A |= cpu_bus.read(word);
+                        self.register.A |= self.cpu_bus.read(word);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -532,14 +629,14 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        self.register.A ^= cpu_bus.read(byte as u16);
+                        self.register.A ^= self.cpu_bus.read(byte as u16);
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteY, Operand::Word(word))|
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        self.register.A ^= cpu_bus.read(word);
+                        self.register.A ^= self.cpu_bus.read(word);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -553,13 +650,13 @@ impl Cpu {
                 let res = match (mode, operand) {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let data = cpu_bus.read(byte as u16);
-                        cpu_bus.write(byte as u16, data.wrapping_add(1))
+                        let data = self.cpu_bus.read(byte as u16);
+                        self.cpu_bus.write(byte as u16, data.wrapping_add(1))
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
-                        cpu_bus.write(word, data.wrapping_add(1))
+                        let data = self.cpu_bus.read(word);
+                        self.cpu_bus.write(word, data.wrapping_add(1))
                     }
                     _ => panic!("error, mode: {:?}, operand: {:?}", mode, operand)
                 };
@@ -572,13 +669,13 @@ impl Cpu {
                 let res = match (mode, operand) {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let data = cpu_bus.read(byte as u16);
-                        cpu_bus.write(byte as u16, data.wrapping_sub(1))
+                        let data = self.cpu_bus.read(byte as u16);
+                        self.cpu_bus.write(byte as u16, data.wrapping_sub(1))
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
-                        cpu_bus.write(word, data.wrapping_sub(1))
+                        let data = self.cpu_bus.read(word);
+                        self.cpu_bus.write(word, data.wrapping_sub(1))
                     }
                     _ => panic!("error, mode: {:?}, operand: {:?}", mode, operand)
                 };
@@ -649,7 +746,7 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let mem = cpu_bus.read(byte as u16);
+                        let mem = self.cpu_bus.read(byte as u16);
                         let a = self.register.A;
                         // N Z C
                         self.register.P.carry = a >= mem;
@@ -661,7 +758,7 @@ impl Cpu {
                     (op::AddressingMode::AbsoluteY, Operand::Word(word))|
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) |
                     (op::AddressingMode::IndexedIndirect, Operand::Word(word)) => {
-                        let mem = cpu_bus.read(word);
+                        let mem = self.cpu_bus.read(word);
                         let a = self.register.A;
 
                         // N Z C
@@ -682,7 +779,7 @@ impl Cpu {
                         self.register.P.negative = (x.wrapping_sub(byte)) & 0b10000_000 != 0;
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {
-                        let mem = cpu_bus.read(byte as u16);
+                        let mem = self.cpu_bus.read(byte as u16);
                         let x = self.register.X;
                         // N Z C
                         self.register.P.carry = x >= mem;
@@ -690,7 +787,7 @@ impl Cpu {
                         self.register.P.negative = (x.wrapping_sub(mem)) & 0b10000_000 != 0;
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word))=> {
-                        let mem = cpu_bus.read(word);
+                        let mem = self.cpu_bus.read(word);
                         let x = self.register.X;
                         // N Z C
                         self.register.P.carry = x >= mem;
@@ -710,7 +807,7 @@ impl Cpu {
                         self.register.P.negative = (y.wrapping_sub(byte)) & 0b10000_000 != 0;
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {
-                        let mem = cpu_bus.read(byte as u16);
+                        let mem = self.cpu_bus.read(byte as u16);
                         let y = self.register.Y;
                         // N Z C
                         self.register.P.carry = y >= mem;
@@ -719,7 +816,7 @@ impl Cpu {
 
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word))=> {
-                        let mem = cpu_bus.read(word);
+                        let mem = self.cpu_bus.read(word);
                         let y = self.register.Y;
                         // N Z C
                         self.register.P.carry = y >= mem;
@@ -741,19 +838,19 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let mut data = cpu_bus.read(byte as u16);
+                        let mut data = self.cpu_bus.read(byte as u16);
                         self.register.P.carry = data & 0b10000_000 != 0;
                         data =  data << 1;
-                        cpu_bus.write(byte as u16, data);
+                        self.cpu_bus.write(byte as u16, data);
                         self.register.P.zero = data == 0;
                         self.register.P.negative = data & 0b10000_000 != 0;
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        let mut data = cpu_bus.read(word);
+                        let mut data = self.cpu_bus.read(word);
                         self.register.P.carry = data & 0b10000_000 != 0;
                         data =  data << 1;
-                        cpu_bus.write(word, data);
+                        self.cpu_bus.write(word, data);
                         self.register.P.zero = data == 0;
                         self.register.P.negative = data & 0b10000_000 != 0;
                     }
@@ -770,19 +867,19 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let mut data = cpu_bus.read(byte as u16);
+                        let mut data = self.cpu_bus.read(byte as u16);
                         self.register.P.carry = data & 0b00000_001 != 0;
                         data =  data >> 1;
-                        cpu_bus.write(byte as u16, data);
+                        self.cpu_bus.write(byte as u16, data);
                         self.register.P.zero = data == 0;
                         self.register.P.negative = data & 0b10000_000 != 0;
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        let mut data = cpu_bus.read(word);
+                        let mut data = self.cpu_bus.read(word);
                         self.register.P.carry = data & 0b00000_001 != 0;
                         data =  data >> 1;
-                        cpu_bus.write(word, data);
+                        self.cpu_bus.write(word, data);
                         self.register.P.zero = data == 0;
                         self.register.P.negative = data & 0b10000_000 != 0;
                     }
@@ -800,18 +897,18 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let data = cpu_bus.read(byte as u16);
+                        let data = self.cpu_bus.read(byte as u16);
                         let data_written = data.rotate_left(1);
-                        cpu_bus.write(byte as u16, data_written);
+                        self.cpu_bus.write(byte as u16, data_written);
                         self.register.P.carry = data & 0x80 != 0;
                         self.register.P.zero = data_written == 0;
                         self.register.P.negative = data_written & 0x80 != 0;
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
+                        let data = self.cpu_bus.read(word);
                         let data_written = data.rotate_left(1);
-                        cpu_bus.write(word, data_written);
+                        self.cpu_bus.write(word, data_written);
                         self.register.P.carry = data & 0x80 != 0;
                         self.register.P.zero = data_written == 0;
                         self.register.P.negative = data_written & 0x80 != 0;
@@ -830,18 +927,18 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        let data = cpu_bus.read(byte as u16);
+                        let data = self.cpu_bus.read(byte as u16);
                         let data_written = data.rotate_right(1);
-                        cpu_bus.write(byte as u16, data_written);
+                        self.cpu_bus.write(byte as u16, data_written);
                         self.register.P.carry = data & 0x01 != 0;
                         self.register.P.zero = data_written == 0;
                         self.register.P.negative = data_written & 0x80 != 0;
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) |
                     (op::AddressingMode::AbsoluteX, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
+                        let data = self.cpu_bus.read(word);
                         let data_written = data.rotate_right(1);
-                        cpu_bus.write(word, data_written);
+                        self.cpu_bus.write(word, data_written);
                         self.register.P.carry = data & 0x01 != 0;
                         self.register.P.zero = data_written == 0;
                         self.register.P.negative = data_written & 0x80 != 0;
@@ -862,8 +959,7 @@ impl Cpu {
                     }
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) |
                     (op::AddressingMode::ZeropageX, Operand::Byte(byte)) => {
-                        // TODO: 自信ない
-                        let data = cpu_bus.read(byte as u16);
+                        let data = self.cpu_bus.read(byte as u16);
                         let result = self.register.A as u16 - data as u16 - (1 - self.register.P.carry as u16);
                         self.register.P.carry = result > 0x00ffu16;
                         self.register.P.overflow = ((self.register.A as u16 ^ result) & 0x80) != 0 && ((self.register.A ^ data) & 0x80) != 0;
@@ -876,7 +972,7 @@ impl Cpu {
                     (op::AddressingMode::AbsoluteY, Operand::Word(word))|
                     (op::AddressingMode::AbsoluteIndirect, Operand::Word(word)) |
                     (op::AddressingMode::IndirectIndexed, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
+                        let data = self.cpu_bus.read(word);
                         let result = self.register.A as u16 - data as u16 - (1 - self.register.P.carry as u16);
                         self.register.P.carry = result > 0x00ffu16;
                         self.register.P.overflow = ((self.register.A as u16 ^ result) & 0x80) != 0 && ((self.register.A ^ data) & 0x80) != 0;
@@ -893,13 +989,13 @@ impl Cpu {
             op::OpCode::BIT => {
                 match (mode, operand) {
                     (op::AddressingMode::Zeropage, Operand::Byte(byte)) => {
-                        let data = cpu_bus.read(byte as u16);
+                        let data = self.cpu_bus.read(byte as u16);
                         self.register.P.negative = data & 0x80 != 0;
                         self.register.P.overflow = data & 0x40 != 0;
                         self.register.P.zero = self.register.A & data != 0;
                     }
                     (op::AddressingMode::Absolute, Operand::Word(word)) => {
-                        let data = cpu_bus.read(word);
+                        let data = self.cpu_bus.read(word);
                         self.register.P.negative = data & 0x80 != 0;
                         self.register.P.overflow = data & 0x40 != 0;
                         self.register.P.zero = self.register.A & data != 0;
@@ -913,7 +1009,7 @@ impl Cpu {
             op::OpCode::PHA => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        self.stack_push(cpu_bus, self.register.A);
+                        self.stack_push(self.register.A);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -921,7 +1017,7 @@ impl Cpu {
             op::OpCode::PLA => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        self.register.A = self.stack_pop(cpu_bus);
+                        self.register.A = self.stack_pop();
                         // N Z
                         self.register.P.negative = self.register.A & 0b10000000 != 0;
                         self.register.P.zero = self.register.A == 0;
@@ -933,7 +1029,7 @@ impl Cpu {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
                         let flag = self.get_flags();
-                        self.stack_push(cpu_bus, flag);
+                        self.stack_push(flag);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
@@ -941,7 +1037,7 @@ impl Cpu {
             op::OpCode::PLP => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        let flag = self.stack_pop(cpu_bus);
+                        let flag = self.stack_pop();
                         self.set_flags(flag);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -962,8 +1058,8 @@ impl Cpu {
                 match (mode, operand) {
                     (op::AddressingMode::AbsoluteIndirect, Operand::Word(word)) => {
                         let mut pc = self.register.PC.wrapping_sub(1);
-                        self.stack_push(cpu_bus, pc.rotate_right(8) as u8);
-                        self.stack_push(cpu_bus, pc as u8);
+                        self.stack_push(pc.rotate_right(8) as u8);
+                        self.stack_push(pc as u8);
                         self.register.PC = word;
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -972,7 +1068,7 @@ impl Cpu {
             op::OpCode::RTS => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        self.stack_pop(cpu_bus);
+                        self.stack_pop();
                         self.register.PC += 1;
                     }
 
@@ -982,8 +1078,8 @@ impl Cpu {
             op::OpCode::RTI => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        self.pop_status(cpu_bus);
-                        self.pop_pc(cpu_bus);
+                        self.pop_status();
+                        self.pop_pc();
                         // ↓ jsの人はこのようにが仕様にないし、goの人もやっていない
                         // self.register.P.reserved = true;
                     }
@@ -999,7 +1095,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if !self.register.P.carry {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1011,7 +1107,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if self.register.P.carry {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1023,7 +1119,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if self.register.P.zero {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1035,7 +1131,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if !self.register.P.zero {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1047,7 +1143,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if !self.register.P.overflow {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1059,7 +1155,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if self.register.P.overflow {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
 
                     }
@@ -1072,7 +1168,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if !self.register.P.negative {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1084,7 +1180,7 @@ impl Cpu {
                     (op::AddressingMode::Relative, Operand::Word(word)) => {
                         if self.register.P.negative {
                             self.register.PC = word;
-                            cycles += self.addBranchCycles(word, cycles);
+                            cycles += self.add_branch_cycles(word, cycles);
                         }
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
@@ -1153,18 +1249,8 @@ impl Cpu {
             op::OpCode::BRK => {
                 match (mode, operand) {
                     (op::AddressingMode::Implied, Operand::None) => {
-                        let old_interrupt = self.register.P.interrupt;
-                        self.register.PC += 1;
-                        self.stack_push(cpu_bus, (self.register.PC >> 8) as u8);
-                        self.stack_push(cpu_bus, (self.register.PC & 0xFF)as u8);
-                        self.register.P.breakm = true;
-                        self.push_status(cpu_bus);
                         self.register.P.interrupt = true;
-                        if !old_interrupt {
-                            let addr: u16 = cpu_bus.read(0xfffe) as u16 | ((cpu_bus.read(0xffff) as u16) << 8);
-                            self.register.PC = addr;
-                        }
-                        self.register.PC -= 1;
+                        self.interrupt(op::Interrupt::BRK);
                     }
                     _ => panic!("error opcode: {:?}, mode: {:?}", mode, operand)
                 }
