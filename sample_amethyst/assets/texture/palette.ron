@@ -1,25 +1,25 @@
-List((
-    texture_width: 512,
-    texture_height: 128,
-    sprites: [
-        (
-            x: 0,
-            y: 0,
-            width: 32,
-            height: 32,
-        ),
-        (
-            x: 32,
-            y: 0,
-            width: 32,
-            height: 32,
-        ),
-    ],
-))
+// List((
+//     texture_width: 512,
+//     texture_height: 128,
+//     sprites: [
+//         (
+//             x: 0,
+//             y: 0,
+//             width: 32,
+//             height: 32,
+//         ),
+//         (
+//             x: 32,
+//             y: 0,
+//             width: 32,
+//             height: 32,
+//         ),
+//     ],
+// ))
 // TODO: Gridでどうやるか
 Grid((
     texture_width: 512,
     texture_height: 128,
-    columns: 2,
-    sprite_count: 2
+    columns: 16,
+    rows: Some(4),
 ))

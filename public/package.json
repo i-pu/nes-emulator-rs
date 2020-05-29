@@ -1,0 +1,15 @@
+{
+  "name": "nes-emulator-rs",
+  "collaborators": [
+    "hamadakafu <kafu.h1998@gmail.com>"
+  ],
+  "version": "0.1.0",
+  "files": [
+    "nes_emulator_rs_bg.wasm",
+    "nes_emulator_rs.js",
+    "nes_emulator_rs.d.ts"
+  ],
+  "module": "nes_emulator_rs.js",
+  "types": "nes_emulator_rs.d.ts",
+  "sideEffects": false
+}

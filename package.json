@@ -1,0 +1,21 @@
+{
+  "name": "nes-emulator-rs",
+  "version": "1.0.0",
+  "main": "public/index.js",
+  "repository": "git@github.com:i-pu/nes-emulator-rs.git",
+  "author": "hamadakafu <kafu.h1998@gmail.com>",
+  "license": "MIT",
+  "scripts": {
+    "build": "wasm-pack build --out-dir public/pkg",
+    "dev": "webpack-dev-server --content-base ./public --mode development --port 1234"
+  },
+  "dependencies": {
+    "webpack-cli": "^3.3.9"
+  },
+  "devDependencies": {
+    "@wasm-tool/wasm-pack-plugin": "^1.3.1",
+    "html-webpack-plugin": "^4.3.0",
+    "webpack": "^4.40.2",
+    "webpack-dev-server": "^3.8.1"
+  }
+}

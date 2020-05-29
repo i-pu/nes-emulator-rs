@@ -20,21 +20,23 @@ impl Component for SomeColor {
 }
 
 pub fn initialise_some_color(world: &mut World, sprite_sheet_handle: Handle<SpriteSheet>) {
-    let mut transform = Transform::default();
-    // Correctly position the paddles.
-    transform.set_translation_xyz(ARENA_WIDTH / 2., ARENA_HEIGHT / 2., 0.0);
+    for i in 0..64 {
+        let mut transform = Transform::default();
+        // Correctly position the paddles.
+        transform.set_translation_xyz(ARENA_WIDTH / 2., ARENA_HEIGHT / 2., 0.0);
 
-    // Assign the sprites for the paddles
-    let sprite_render = SpriteRender {
-        sprite_sheet: sprite_sheet_handle,
-        sprite_number: 1, // ball is the second sprite in the sprite_sheet
-    };
+        // Assign the sprites for the paddles
+        let sprite_render = SpriteRender {
+            sprite_sheet: sprite_sheet_handle.clone(),
+            sprite_number: i, // ball is the second sprite in the sprite_sheet
+        };
 
-    // Create a left plank entity.
-    world
-        .create_entity()
-        .with(SomeColor::new())
-        .with(transform)
-        .with(sprite_render.clone())
-        .build();
+        // Create a left plank entity.
+        world
+            .create_entity()
+            .with(SomeColor::new())
+            .with(transform)
+            .with(sprite_render.clone())
+            .build();
+        }
 }
