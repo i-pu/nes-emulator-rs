@@ -38,7 +38,7 @@ impl CpuBus {
             }
             // I/O port Ppu
             addr @ 0x2000..=0x3fff => {
-                let ppu = self.ppu.borrow();
+                let mut ppu = self.ppu.borrow_mut();
 
                 ppu.read_register((addr % 8) + 0x2000)
             }

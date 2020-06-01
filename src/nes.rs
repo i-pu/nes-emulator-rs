@@ -14,7 +14,7 @@ const CHARACTER_ROM_SIZE: usize = 0x2000;
 
 pub struct NES {
     cpu: Rc<RefCell<cpu::Cpu>>,
-    ppu: Rc<RefCell<ppu::Ppu>>,
+    pub ppu: Rc<RefCell<ppu::Ppu>>,
 }
 
 /// CPUのクロック数の管理やppuのクロック数の管理をする
@@ -38,6 +38,37 @@ impl NES {
         ppu.borrow_mut().add_cpu(cpu.clone());
 
         Ok(NES { cpu, ppu })
+    }
+
+    pub fn load(program: Vec<u8>) -> Self {
+        let (prog, _) = NES::parse(program).unwrap();
+
+        dbg!(&prog[..20]);
+
+        // wramの初期化
+        let wram = wram::WRAM::new();
+        // ppuの初期化
+        let screen = screen::Screen::new();
+        let ppu = Rc::new(RefCell::new(ppu::Ppu::new(screen, Weak::new())));
+
+        let cpu_bus = cpu_bus::CpuBus::new(wram, ppu.clone(), prog);
+        let mut cpu = Rc::new(RefCell::new(cpu::Cpu::new(cpu_bus)));
+        ppu.borrow_mut().add_cpu(cpu.clone());
+
+        NES { cpu, ppu }
+    }
+
+    pub fn next(&mut self) {
+        // let hz = 179_000u32 / 6;
+        // cycles: cpuが何サイクル回ったか
+        let mut cycles: usize = 0;
+
+        // cpu実行
+        cycles += self.cpu.borrow_mut().run() as usize;
+        // ppu 実行
+        self.ppu.borrow_mut().run(3 * cycles);
+        // 1ナノ秒 = 0.000 000 001 秒
+        // std::thread::sleep(std::time::Duration::new(0, 1_000_000_000 / hz));
     }
 
     pub fn run(mut self) {

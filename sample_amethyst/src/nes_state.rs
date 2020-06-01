@@ -6,11 +6,12 @@ use amethyst::{
     renderer::{Camera, ImageFormat, SpriteRender, SpriteSheet, SpriteSheetFormat, Texture},
 };
 
-pub const ARENA_HEIGHT: f32 = 500.0;
-pub const ARENA_WIDTH: f32 = 500.0;
+pub const ARENA_HEIGHT: f32 = 600.0;
+pub const ARENA_WIDTH: f32 = 512.0;
+pub const SCREEN_HEIGHT: f32 = 480.0;
+pub const SCREEN_WIDTH: f32 = 512.0;
 
-pub struct NesState {
-}
+pub struct NesState {}
 
 impl SimpleState for NesState {
     fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {

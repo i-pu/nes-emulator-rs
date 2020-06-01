@@ -3,13 +3,11 @@ use std::ops::Index;
 use crate::screen;
 use crate::screen::{SCREEN_SIZE, INTERNAL_SIZE};
 use crate::cpu;
-use crate::cpu::op;
-use crate::cpu_bus;
 use std::rc::{Weak, Rc};
 use std::cell::RefCell;
 
 pub struct PpuBus {
-    screen: screen::Screen,
+    pub screen: screen::Screen,
     cpu: Weak<RefCell<cpu::Cpu>>,
 }
 
@@ -22,11 +20,16 @@ impl PpuBus {
 pub struct Ppu {
     pub register: Register,
 
-    /// internal screen
-    screen: Vec<Vec<u8>>,
+    /// internal screen buffer
+    screen_buf: Vec<Vec<u8>>,
+
+    /// buffer
+    /// 2回書き込見済みであればtrue
+    /// 1回しか書いてないならfalse
+    buffer_2006: (u16, bool),
 
     /// ppu bus
-    ppu_bus: PpuBus,
+    pub ppu_bus: PpuBus,
     /// パレットにはNESの色ID
     /// [00VVHHHH]: u8
     /// V: 明度
@@ -153,14 +156,16 @@ impl Ppu {
                 ppuaddr: 0,
                 ppudata: 0,
             },
-            screen: vec![vec![0u8; SCREEN_SIZE.0]; SCREEN_SIZE.1],
+            screen_buf: vec![vec![0u8; SCREEN_SIZE.0]; SCREEN_SIZE.1],
             ppu_bus: PpuBus::new(screen, cpu),
             vram: vec![0; 0x4000],
             cycles: 0,
             lines: 0,
             frames: 0,
+            buffer_2006: (0, true),
         }
     }
+
 
     fn blank_asseted(&mut self) -> bool {
         self.register.ppuctrl & 0b1000_0000 > 0
@@ -196,22 +201,19 @@ impl Ppu {
                 // 240line = 240 * 341 cycle 目にできた画面を転送
                 println!("{} frame", self.frames);
                 self.frames += 1;
-                let s = vec![vec![]];
-                self.ppu_bus.screen.draw(s);
+                self.build_screen();
+                self.ppu_bus.screen.draw(self.build_screen());
             }
             241 => {
                 dbg!(&self.register);
                 // interrupt NMI if VBLANK is asseted
                 if self.blank_asseted() {
-                    let mut cpu = self.ppu_bus.cpu.upgrade().unwrap();
+                    let cpu = self.ppu_bus.cpu.upgrade().unwrap();
                     cpu.borrow_mut().set_nmi_flag();
                 }
             }
             242..=260 => {
-                if self.lines % 8 == 0 {
-                    self.build_background();
-                    // println!("vertical blanking line");
-                }
+                // println!("vertical blanking line");
             }
             // last line
             261 => {
@@ -223,7 +225,7 @@ impl Ppu {
     }
 
     // TODO: readレジスタの動作を記述する
-    pub fn read_register(&self, addr: u16) -> u8 {
+    pub fn read_register(&mut self, addr: u16) -> u8 {
         match addr {
             0x2000 => self.register.ppuctrl,
             0x2001 => self.register.ppumask,
@@ -231,16 +233,26 @@ impl Ppu {
             0x2003 => self.register.oamaddr,
             0x2004 => self.register.oamdata,
             0x2005 => self.register.ppuscroll,
-            0x2006 => self.register.ppuaddr,
-            0x2007 => self.register.ppudata,
+            0x2006 => {
+                panic!("2006には読み込みがないはず");
+            }
+            0x2007 => {
+                // TODO: PPU mem addr += 1 or += 32
+                if true {
+                    self.buffer_2006.0 += 0x01;
+                } else {
+                    self.buffer_2006.0 += 0x20;
+                }
+
+                self.register.ppudata
+            }
             _ => panic!("そんなppuれじすたない{:?}", addr)
         }
     }
-
-    // TODO: implement
-    pub fn build_background(&mut self) {
-        // todo!("implement");
-    }
+    // load 2006 3f // buf: [3f ??] count: 0
+    // load 2006 00 // buf: [3f 00] count: 1
+    // st 2006 4a // $2006:[3f 00] -> [3f 01] 3f00に4aを書きたい
+    // load 2006 10 buf:[10 00] or data:[3f 02]
 
     // TODO: writeレジスタの動作を記述する
     pub fn write_register(&mut self, addr: u16, data: u8) -> u8 {
@@ -254,19 +266,49 @@ impl Ppu {
             0x2004 => self.register.oamdata = data,
             0x2005 => self.register.ppuscroll = data,
             0x2006 => {
-                // if self.write_addr.len() == 2 {
-                //     let addr = self.write_addr;
-                //     self.vram[addr] = data;
-                // } else {
-                //     self.write_addr.push(data);
-                // }
-                // self.register.ppuaddr = data;
+                // 1st: hi: u8, 2nd: low: u8 -> u16
+                if self.buffer_2006.1 {
+                    // 1st
+                    self.buffer_2006.0 = (data as u16) << 8;
+                    self.buffer_2006.1 = !self.buffer_2006.1;
+                } else {
+                    // 2nd
+                    self.buffer_2006.0 += data as u16;
+                    self.buffer_2006.1 = !self.buffer_2006.1;
+                }
             }
-            0x2007 => self.register.ppudata = data,
+            0x2007 => {
+                self.write_vram(self.buffer_2006.0, data);
+                // TODO: レジスタ見て切り替えるようにする
+                if true {
+                    self.buffer_2006.0 += 0x01;
+                } else {
+                    self.buffer_2006.0 += 0x20;
+                }
+            }
             _ => panic!("そんなppuれじすたない{:?}", addr)
         }
         data
     }
+
+    // TODO: implement
+    pub fn build_screen(&self) -> Vec<Vec<u8>> {
+        // Color: xx GG BB RR: u8
+        let mut tmp = vec![vec![0; SCREEN_SIZE.0]; SCREEN_SIZE.1];
+        for y in 0..(SCREEN_SIZE.1 / 8) {
+            for x in 0..(SCREEN_SIZE.0 / 8) {
+                // build 8x8 block
+                for bx in 0..8 {
+                    for by in 0..8 {
+                        // black
+                        tmp[y * 8 + by][x * 8 + bx] = 0b00000000;
+                    }
+                }
+            }
+        }
+        tmp
+    }
+
 
     /// vramを読む
     pub fn read_vram(&self, addr: u16) -> u8 {

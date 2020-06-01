@@ -10,6 +10,8 @@ crate-type = ["cdylib", "lib"]
 [dependencies]
 js-sys = "0.3.40"
 wasm-bindgen = "*"
+console_error_panic_hook = "*"
+wasm-bindgen-futures = "*"
 
 [workspace]
 members = ["sample_amethyst"]
@@ -22,4 +24,7 @@ features = [
   'Element',
   'HtmlCanvasElement',
   'Window',
+  'ImageData',
+  'File',
+  'console',
 ]
