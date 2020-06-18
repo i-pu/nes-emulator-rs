@@ -17,9 +17,10 @@ impl SimpleState for NesState {
     fn on_start(&mut self, data: StateData<'_, GameData<'_, '_>>) {
         let world = data.world;
         let sprite_sheet_handle = load_sprite_sheet(world);
-        world.register::<crate::some_color::SomeColor>();
+        // world.register::<crate::some_color::SomeColor>();
 
-        crate::some_color::initialise_some_color(world, sprite_sheet_handle);
+        // crate::some_color::initialise_some_color(world, sprite_sheet_handle);
+        crate::component::pixel::initialise_pixel(world, sprite_sheet_handle);
         initialise_camera(world);
     }
 }

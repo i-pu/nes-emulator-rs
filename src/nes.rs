@@ -12,6 +12,8 @@ const NES_HEADER_SIZE: usize = 0x0010;
 const PROGRAM_ROM_SIZE: usize = 0x4000;
 const CHARACTER_ROM_SIZE: usize = 0x2000;
 
+use web_sys;
+
 pub struct NES {
     cpu: Rc<RefCell<cpu::Cpu>>,
     pub ppu: Rc<RefCell<ppu::Ppu>>,
@@ -41,7 +43,7 @@ impl NES {
     }
 
     pub fn load(program: Vec<u8>) -> Self {
-        let (prog, _) = NES::parse(program).unwrap();
+        let (prog, chrs) = NES::parse(program).unwrap();
 
         dbg!(&prog[..20]);
 
@@ -54,21 +56,21 @@ impl NES {
         let cpu_bus = cpu_bus::CpuBus::new(wram, ppu.clone(), prog);
         let mut cpu = Rc::new(RefCell::new(cpu::Cpu::new(cpu_bus)));
         ppu.borrow_mut().add_cpu(cpu.clone());
+        ppu.borrow_mut().load_pattern_table(chrs);
 
         NES { cpu, ppu }
     }
 
-    pub fn next(&mut self) {
-        // let hz = 179_000u32 / 6;
+    /// # next
+    /// nesをcpuの1命令ごとにすすめる
+    /// # Return
+    /// cpuが何サイクル使ったか
+    pub fn next(&mut self) -> usize {
         // cycles: cpuが何サイクル回ったか
         let mut cycles: usize = 0;
-
-        // cpu実行
         cycles += self.cpu.borrow_mut().run() as usize;
-        // ppu 実行
         self.ppu.borrow_mut().run(3 * cycles);
-        // 1ナノ秒 = 0.000 000 001 秒
-        // std::thread::sleep(std::time::Duration::new(0, 1_000_000_000 / hz));
+        return cycles;
     }
 
     pub fn run(mut self) {
@@ -98,7 +100,6 @@ impl NES {
         }
         let program_rom_page = binary[4];
         // TODO: logの方法を考える
-        // TODO: debugの仕方を考える
         // TODO: ちゃんとぱーす考える
         //   log.info('prom pages =', programROMPages);
         let character_rom_page = binary[5];

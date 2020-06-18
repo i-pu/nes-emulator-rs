@@ -2,45 +2,83 @@
 /// screen size(width, height)
 pub const SCREEN_SIZE: (usize, usize) = (256, 240);
 pub const INTERNAL_SIZE: (usize, usize) = (341, 262);
+pub const DEBUG_SCREEN_SIZE: (usize, usize) = (500, 500);
 
 pub struct Screen {
     /// 画面
-    pub screen: Vec<u8>
+    pub screen: Vec<u8>,
+    // デバッグ画面()
+    pub debug_screen: Vec<u8>,
+}
+
+/// https://github.com/bokuweb/rustynes/blob/master/src/nes/renderer/color.rs
+pub static COLORS: &'static [(u8, u8, u8)] = &[
+  (0x80, 0x80, 0x80), (0x00, 0x3D, 0xA6), (0x00, 0x12, 0xB0), (0x44, 0x00, 0x96),
+  (0xA1, 0x00, 0x5E), (0xC7, 0x00, 0x28), (0xBA, 0x06, 0x00), (0x8C, 0x17, 0x00),
+  (0x5C, 0x2F, 0x00), (0x10, 0x45, 0x00), (0x05, 0x4A, 0x00), (0x00, 0x47, 0x2E),
+  (0x00, 0x41, 0x66), (0x00, 0x00, 0x00), (0x05, 0x05, 0x05), (0x05, 0x05, 0x05),
+  (0xC7, 0xC7, 0xC7), (0x00, 0x77, 0xFF), (0x21, 0x55, 0xFF), (0x82, 0x37, 0xFA),
+  (0xEB, 0x2F, 0xB5), (0xFF, 0x29, 0x50), (0xFF, 0x22, 0x00), (0xD6, 0x32, 0x00),
+  (0xC4, 0x62, 0x00), (0x35, 0x80, 0x00), (0x05, 0x8F, 0x00), (0x00, 0x8A, 0x55),
+  (0x00, 0x99, 0xCC), (0x21, 0x21, 0x21), (0x09, 0x09, 0x09), (0x09, 0x09, 0x09),
+  (0xFF, 0xFF, 0xFF), (0x0F, 0xD7, 0xFF), (0x69, 0xA2, 0xFF), (0xD4, 0x80, 0xFF),
+  (0xFF, 0x45, 0xF3), (0xFF, 0x61, 0x8B), (0xFF, 0x88, 0x33), (0xFF, 0x9C, 0x12),
+  (0xFA, 0xBC, 0x20), (0x9F, 0xE3, 0x0E), (0x2B, 0xF0, 0x35), (0x0C, 0xF0, 0xA4),
+  (0x05, 0xFB, 0xFF), (0x5E, 0x5E, 0x5E), (0x0D, 0x0D, 0x0D), (0x0D, 0x0D, 0x0D),
+  (0xFF, 0xFF, 0xFF), (0xA6, 0xFC, 0xFF), (0xB3, 0xEC, 0xFF), (0xDA, 0xAB, 0xEB),
+  (0xFF, 0xA8, 0xF9), (0xFF, 0xAB, 0xB3), (0xFF, 0xD2, 0xB0), (0xFF, 0xEF, 0xA6),
+  (0xFF, 0xF7, 0x9C), (0xD7, 0xE8, 0x95), (0xA6, 0xED, 0xAF), (0xA2, 0xF2, 0xDA),
+  (0x99, 0xFF, 0xFC), (0xDD, 0xDD, 0xDD), (0x11, 0x11, 0x11), (0x11, 0x11, 0x11),
+];
+
+// NES Color to RGB
+pub fn mapping_color(color: u8) -> (u8, u8, u8) {
+    if color >= 64 {
+        (0xff, 0xff, 0xff)
+    } else {
+        COLORS[color as usize]
+    }
 }
 
 impl Screen {
     pub fn new() -> Screen {
         Screen {
             screen: vec![0u8; SCREEN_SIZE.0 * SCREEN_SIZE.1 * 4],
+            debug_screen: vec![0u8; DEBUG_SCREEN_SIZE.0 * DEBUG_SCREEN_SIZE.1 * 4],
         }
     }
 
     /// draw screen
+    /// # Arguments
+    /// pixels: nesの世界でのカラーの色が来る
     /// u6すなわち64個のうちのどれかの色を指定する
     pub fn draw(&mut self, pixels: Vec<Vec<u8>>) {
         print!("draw completed");
-        self.screen = self.convert_screen_to_image(pixels);
+        self.screen = self.convert_screen_to_image(pixels, SCREEN_SIZE);
     }
 
-    pub fn convert_screen_to_image(&self, pixels: Vec<Vec<u8>>) -> Vec<u8> {
-        assert!(pixels.len() == SCREEN_SIZE.1 && pixels[0].len() == SCREEN_SIZE.0);
+    pub fn draw_debug(&mut self, pixels: Vec<u8>) {
+        let data = pixels.chunks(DEBUG_SCREEN_SIZE.0).map(|chk| chk.to_vec()).collect();
+        print!("draw debug completed");
+        self.debug_screen = self.convert_screen_to_image(data, DEBUG_SCREEN_SIZE);
+    }
 
+    /// rgbaの順にu8をしまっていく
+    /// size(width, height)
+    pub fn convert_screen_to_image(&mut self, pixels: Vec<Vec<u8>>, size: (usize, usize)) -> Vec<u8> {
+        // assert!(pixels.len() == SCREEN_SIZE.1 && pixels[0].len() == SCREEN_SIZE.0);
         let mut data = Vec::new();
-
-        // TODO: color mapping
-        for y in 0..SCREEN_SIZE.1 {
-            for x in 0..SCREEN_SIZE.0 {
-                // R
-                data.push(pixels[y][x] & 0b00110000);
-                // G
-                data.push(pixels[y][x] & 0b00001100);
-                // B
-                data.push(pixels[y][x] & 0b00000011);
-                // A
-                data.push(255);
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let (r, g, b) = mapping_color(
+                    *pixels.get(y)
+                        .map(|a| a.get(x).unwrap_or(&std::u8::MAX))
+                        .unwrap_or(&std::u8::MAX)
+                );
+                // rgba
+                data.extend(vec![r, g, b, 255]);
             }
         }
-
         data
     }
 }

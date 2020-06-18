@@ -14,6 +14,8 @@ use nes_emulator_rs;
 
 mod nes_state;
 mod some_color;
+mod system;
+mod component;
 
 // TODO: グリッドをつかたspriteの定義を試す
 

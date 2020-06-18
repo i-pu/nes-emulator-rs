@@ -12,6 +12,7 @@ js-sys = "0.3.40"
 wasm-bindgen = "*"
 console_error_panic_hook = "*"
 wasm-bindgen-futures = "*"
+itertools = "*"
 
 [workspace]
 members = ["sample_amethyst"]

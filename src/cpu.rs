@@ -127,7 +127,6 @@ impl Cpu {
         let pc = self.register.PC;
         // 僕ウェブさんはinterruptsを消費していた
         if self.interrupts.nmi {
-            // TODO: debugのときスタックの中身が見たい
             self.interrupt(op::Interrupt::NMI);
         }
         if self.interrupts.irq {
@@ -156,7 +155,7 @@ impl Cpu {
 
     /// スタックにプッシュ(下方向に伸びる)
     /// see <https://pgate1.at-ninja.jp/NES_on_FPGA/nes_cpu.htm#stack>
-    // TODO: トップまでいったら一周してもとに戻る説確認
+    // ??: トップまでいったら一周してもとに戻る説確認
     fn stack_push(&mut self, data: u8) {
         if self.register.SP == 0 {
             panic!("Stack Overflow");
@@ -194,7 +193,7 @@ impl Cpu {
     }
 
     /// 割り込み
-    /// TODO: popstatus誰がいつ実行するのか 割り込みベクタの飛んだ先のアドレスでrtiが実行されるのでは?
+    // ??: popstatus誰がいつ実行するのか 割り込みベクタの飛んだ先のアドレスでrtiが実行されるのでは?
     pub fn interrupt(&mut self, interruption: op::Interrupt) {
         // nested interrupt not allowed
         if self.register.P.interrupt && (interruption == op::Interrupt::IRQ || interruption == op::Interrupt::BRK) {
